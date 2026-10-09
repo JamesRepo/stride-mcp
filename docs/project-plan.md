@@ -29,7 +29,7 @@ flowchart TB
 
 ### Phase 1: Log in from the command line
 Detailed plan: [Phase 1](phases/phase-1-login.md)
-- `stride-mcp login`: asks for email, password and MFA code, then saves tokens
+- `stride-mcp login`: I log in on Garmin's page in my browser and paste back the address. Tokens are saved.
 - `stride-mcp whoami`: checks the saved tokens still work
 - **Done when:** I can log in once and `whoami` still works days later.
 
@@ -66,5 +66,6 @@ Detailed plan: [Phase 1](phases/phase-1-login.md)
 |---|---|
 | Which AI apps? | Any app that supports MCP, including Claude and ChatGPT |
 | Login: Java or Python helper? | Write it ourselves in Java |
+| Login: password prompt or browser? | Browser. Garmin blocks password logins from Java clients (October 2026). |
 | Where do tokens live? | A private file in my home folder. Keychain later, maybe. |
 | Which data first? | Eventually sleep, steps, all activity data and weight. Start with whichever is easiest. |

@@ -13,7 +13,7 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 
 ## Current status
 
-- **Phase 1 (command-line login):** in progress. Plan: `docs/phase-1-login.md`.
+- **Phase 1 (command-line login):** in progress. Plan: `docs/phases/phase-1-login.md`.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 
@@ -52,24 +52,24 @@ Keep the layers separate: **MCP tools → Garmin client → auth.** Tools never 
 ## Hard rules
 
 ### Never trigger a real Garmin login
-- **Don't run `login`, the spike's `login` mode, or any code that posts real credentials.** Only the human runs those.
-- Garmin's login endpoint rate-limits after **two or three attempts** (HTTP 429), and repeated logins can lock the account.
-- Even the credential-free `probe` mode counts against the rate limit. Ask before running it.
+- **Don't run `login`, the spike's `login`/`browser` modes, or anything that uses a real ticket or token.** Only the human runs those. If the human pastes a ticket or token into the chat, don't use it. Ask them to paste it into their terminal instead.
+- Login is **browser-based** (see `docs/phases/phase-1-login.md`). Don't reintroduce a password login: Garmin returns HTTP 429 to non-browser clients based on their connection fingerprint.
+- The credential-free `probe` mode still hits Garmin's login endpoint and counts toward rate limits. Ask before running it.
 - Tests must use a **fake HTTP server**, never real Garmin endpoints.
 
 ### Never leak secrets
-- Never print, log, or include in exception messages: passwords, MFA codes, service tickets (`ST-…`), access tokens or refresh tokens.
-- Passwords come from a hidden console prompt only. Never from command-line arguments, environment variables or files.
+- Never print, log, or include in exception messages: service tickets (`ST-…`), access tokens or refresh tokens. Error bodies from Garmin are fine to show if they contain none of these.
+- stride-mcp never handles the Garmin password. Don't add any code that asks for it or stores it.
 - The token file (`~/.stride-mcp/garmin_tokens.json`) must stay `600` inside a `700` folder, and be written atomically (temp file, then move).
 - Never commit tokens, `.env` files, or `application-local.*` (already gitignored).
 
 ### Be gentle with Garmin
-- No retry loops on login. On 403, 429 or CAPTCHA: stop and show a clear message.
+- No retry loops on login or token calls. On 403 or 429: stop and show a clear message.
 - Refresh tokens instead of logging in again. Cache data instead of re-fetching it.
 
 ### Keep Garmin's changing details in one place
 - URLs, client IDs, user agents and headers live in `GarminAuthConfig` (or the equivalent config class for data endpoints). Never hard-code them elsewhere.
-- The login flow follows [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (MIT). When Garmin breaks something, check that project's recent changes first. Re-implement, don't copy code.
+- The token swap and refresh follow [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (MIT). When Garmin breaks something, check that project's recent changes first. Re-implement, don't copy code.
 
 ### stdio safety (phase 3 onwards)
 - In stdio mode, **stdout is the MCP channel**. Nothing else may write to it: no `System.out`, no Spring banner, no console logging. Logs go to a file.
@@ -79,7 +79,7 @@ Keep the layers separate: **MCP tools → Garmin client → auth.** Tools never 
 - Match the surrounding code. Plain, readable Java. Use records for data, and constructor injection.
 - Clear, specific exceptions (for example "not logged in", "session expired", "rate limited") whose messages tell the user what to do next.
 - Write MCP tool descriptions for an AI reader: say what the tool returns, what the inputs mean (with units and date formats), and when to use it.
-- Add tests with each change. Cover the failure paths (wrong password, MFA, 403, 429, expired refresh token), not just success.
+- Add tests with each change. Cover the failure paths (bad paste, rejected ticket, unknown client IDs, 429, expired refresh token), not just success.
 - No new dependencies without saying why.
 
 ## Docs

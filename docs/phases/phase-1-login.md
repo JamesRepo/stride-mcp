@@ -1,12 +1,12 @@
 # Phase 1: Log in from the command line
 
-**Goal:** log in to Garmin once from the terminal, save the tokens, and keep them working without logging in again.
+**Goal:** log in to Garmin once, save the tokens, and keep them working without logging in again.
 
 **Done when:**
 
-- `login` works, including the MFA code if Garmin asks for one
-- `whoami` still works days later, with no password needed
-- My password is never saved or logged
+- `login` works, including MFA
+- `whoami` still works days later, with no new login
+- stride-mcp never sees my password
 
 ## The commands
 
@@ -14,32 +14,31 @@ All three run from the same jar that will later be the MCP server.
 
 | Command | What it does |
 |---|---|
-| `stride-mcp login` | Asks for email, password and (if needed) MFA code. Saves tokens. |
-| `stride-mcp whoami` | Uses the saved tokens to fetch my Garmin profile name. Refreshes them if needed. |
+| `stride-mcp login` | Opens Garmin's sign-in page in my browser. I log in there and paste back the address I end up on. Saves tokens. |
+| `stride-mcp whoami` | Uses the saved tokens to fetch my Garmin profile. Refreshes them if needed. |
 | `stride-mcp logout` | Deletes the saved token file. |
 
-The password is typed at a hidden prompt. It's never passed as a command argument (those end up in shell history) and never written to disk.
+## How the login works
 
-## How the Garmin login works
-
-Based on how the current python-garminconnect library does it (October 2026):
+I log in with **my own browser**, on Garmin's real sign-in page. stride-mcp only receives a single-use **ticket**, then swaps it for tokens.
 
 ```mermaid
 sequenceDiagram
+    actor Me
+    participant B as My browser
     participant S as stride-mcp
     participant SSO as sso.garmin.com
     participant DI as diauth.garmin.com
     participant API as connectapi.garmin.com
-    S->>SSO: 1. email + password (mobile app login)
-    alt MFA needed
-        SSO-->>S: MFA_REQUIRED
-        S->>SSO: 1b. MFA code
-    end
-    SSO-->>S: service ticket (single use)
-    S->>DI: 2. swap ticket for tokens
+    S->>B: 1. open Garmin sign-in page
+    Me->>B: log in (and MFA)
+    SSO-->>B: redirect to the phone-app address, with ?ticket=ST-…
+    Note over B: page can't load (that's expected)
+    Me->>S: 2. paste the address
+    S->>DI: 3. swap ticket for tokens
     DI-->>S: access token + refresh token
-    S->>API: 3. check: fetch my profile
-    API-->>S: profile OK, so save tokens
+    S->>API: 4. check: fetch my profile
+    API-->>S: OK, so save tokens
 ```
 
 Later, when the access token is about to expire:
@@ -49,26 +48,48 @@ sequenceDiagram
     participant S as stride-mcp
     participant DI as diauth.garmin.com
     S->>DI: refresh token
-    DI-->>S: new access token (and maybe new refresh token)
+    DI-->>S: new access token + new refresh token
     Note over S: save straight away
 ```
 
-**Details worth knowing:**
+### What the browser sees
 
-- The access token is a JWT, so we can read its expiry time ourselves. We refresh 15 minutes before it runs out.
-- Garmin uses several app "client IDs" for the token swap, and they change over time. We try a short list in order, and keep that list in one place so it's easy to update.
-- If Garmin asks for a CAPTCHA, or blocks us with a 403 or 429, we **stop and explain**. We don't retry in a loop, because repeated logins can lock the account.
+1. stride-mcp opens `https://sso.garmin.com/sso/login?service=https://mobile.integration.garmin.com/gcm/ios`. This is Garmin's classic sign-in form, and Garmin's MFA works on it as normal.
+2. After login, Garmin redirects to `mobile.integration.garmin.com/gcm/ios?ticket=ST-…`. That address normally opens the Garmin phone app, so a browser can't load it. Safari shows "This Connection Is Not Secure". **Don't click Continue.** Just copy the address.
+3. If the browser is already signed in to Garmin, step 1 skips the form and redirects straight away.
 
-## The main risk: getting through Cloudflare
+## Why the browser, not a password prompt
 
-Garmin's login sits behind Cloudflare bot protection. The Python library spoofs browser connection details to get through. Java's built-in HTTP client can't do that.
+We first tried sending email and password straight to Garmin's phone-app login, the way python-garminconnect does. It failed:
 
-Other projects report that plain clients sometimes still work, so **step 1 is a quick test** before building anything properly.
-
-| If the test… | Then |
+| Finding (October 2026) | Detail |
 |---|---|
-| Works | Carry on with the plan below |
-| Gets blocked (403 or CAPTCHA) | Try fixes in order: match the app's headers and HTTP version more closely; add the short delays the Python library uses; try Garmin's other (web widget) login flow. If none work, come back and decide together. |
+| Java gets through Cloudflare | A fake login got a proper "wrong password" reply, not a bot challenge |
+| …but Garmin then rate-limits | HTTP 429 after 2 attempts. Still 429 an hour later. |
+| It's not about attempts | Garmin rate-limits based on the **client's connection fingerprint**, even from fresh networks ([python-garminconnect #449](https://github.com/cyberjunky/python-garminconnect/pull/449), [#453](https://github.com/cyberjunky/python-garminconnect/issues/453)). Python gets around it by imitating a browser's connection. Java can't. |
+
+A real browser avoids all of that, and handles MFA and CAPTCHAs for free. As a bonus, stride-mcp never sees my password.
+
+Two things that don't work in a browser:
+
+- **The phone-app sign-in page** (`/mobile/sso/en_US/sign-in`) hangs on `/portal/sso/embed`, waiting for the phone app to take over.
+- **Normal Garmin website sign-in**: the website uses up the ticket immediately, and tickets only work once.
+
+## Token facts (measured October 2026)
+
+| | Lifetime | Notes |
+|---|---|---|
+| **Access token** | ~21 hours | A JWT, so we can read its expiry ourselves. Refresh 15 minutes before it runs out. |
+| **Refresh token** | 30 days | Each refresh returns a **new** refresh token |
+| **Ticket** | At least several minutes, if unused | Single use. No need to rush the paste. |
+
+**So:** if stride-mcp refreshes at least once every 30 days, I should never need to log in again. Phase 1's live check confirms this over time.
+
+**Other details:**
+
+- Garmin uses several app "client IDs" for the token swap, and they change over time. We try a short list in order (`…_DI_2025Q2` worked first time), and keep the list in one place.
+- The refresh must use the client ID inside the access token, not just whichever one we tried first.
+- The profile's `displayName` is an ID number, not my name. `whoami` should show a friendlier field.
 
 ## Code layout
 
@@ -76,14 +97,14 @@ Other projects report that plain clients sometimes still work, so **step 1 is a 
 com.hammez.stride
 ├── cli/          login, whoami, logout commands
 └── garmin/auth/
-    ├── GarminSsoClient      step 1: email, password, MFA → service ticket
-    ├── DiTokenClient        step 2 + refresh: ticket → tokens
+    ├── BrowserLogin         opens sign-in page, reads pasted address → ticket
+    ├── DiTokenClient        ticket → tokens, and refresh
     ├── TokenStore           read/write the token file safely
     ├── TokenManager         "give me a valid access token", refreshing if needed
-    └── GarminAuthConfig     URLs, client IDs, user agents (the bits Garmin changes)
+    └── GarminAuthConfig     URLs, client IDs, headers (the bits Garmin changes)
 ```
 
-**Tools:** Java's built-in HTTP client and Jackson (already part of Spring Boot). No new libraries are needed for phase 1.
+**Tools:** Java's built-in HTTP client and Jackson (already part of Spring Boot). No new libraries.
 
 The jar won't start a web server in phase 1. The commands just run and exit.
 
@@ -95,7 +116,7 @@ The jar won't start a web server in phase 1. The commands just run and exit.
 |---|---|
 | Folder readable only by me (`700`), file too (`600`) | The refresh token gives full account access |
 | Write to a temp file, then swap it in | A crash mid-write can't corrupt the tokens |
-| Contains: access token, refresh token, client ID | Nothing else. No password, no email. |
+| Contains: access token, refresh token, client ID, expiry times | Nothing else. No password, no email. |
 
 Moving this to the macOS Keychain is a possible future improvement. `TokenStore` is the only class that would change.
 
@@ -103,24 +124,24 @@ Moving this to the macOS Keychain is a possible future improvement. `TokenStore`
 
 | Situation | Message (roughly) |
 |---|---|
-| Wrong password | "Garmin rejected the email or password." |
-| Wrong MFA code | "MFA code not accepted. Run `login` again." |
-| Blocked (403, CAPTCHA) | "Garmin blocked the login (bot protection). Wait a while, then try again." |
-| Rate limited (429) | "Too many attempts. Wait before trying again." |
+| Pasted text has no ticket | "No ticket found. Copy the full address from the browser's address bar." |
+| Ticket rejected (expired or already used) | "Garmin didn't accept that ticket. Run `login` again." |
+| All client IDs rejected | "Garmin rejected the token swap. Its app IDs may have changed. Check for an update." |
+| Rate limited (429) | "Garmin is rate limiting. Wait before trying again." |
 | No token file | "Not logged in. Run `stride-mcp login`." |
-| Refresh token rejected | "Session expired. Run `stride-mcp login`." |
+| Refresh token rejected or expired | "Session expired. Run `stride-mcp login`." |
 
-Tokens, tickets and passwords are never printed in messages or logs.
+Tickets and tokens are never printed in messages or logs.
 
 ## Steps
 
-1. **Cloudflare test:** a throwaway test that tries step 1 of the login with Java's HTTP client. Record what happens, plus token lifetimes if it works.
+1. ~~**Cloudflare test**~~: done (see above). Led to the browser login.
 2. **Project setup:** command handling (`login`, `whoami`, `logout`) and no web server for now.
 3. **TokenStore:** safe file read and write, with tests for permissions and the temp-file swap.
-4. **GarminSsoClient:** email and password login, plus MFA.
+4. **BrowserLogin:** open the sign-in page, read the pasted address, pull out the ticket.
 5. **DiTokenClient:** ticket-for-tokens swap, and refresh.
 6. **TokenManager + whoami:** load tokens, refresh if close to expiry, save, then fetch my profile.
-7. **Tests:** each client tested against a fake Garmin server (no real logins), covering success, MFA, wrong password, 403, 429 and an expired refresh token.
+7. **Tests:** each part tested against a fake Garmin server (no real logins), covering success, bad paste, rejected ticket, unknown client IDs, 429 and an expired refresh token.
 8. **Live check:** log in for real, run `whoami` over several days, and update these docs with what we learn.
 
 ## Not in phase 1
@@ -129,8 +150,8 @@ Tokens, tickets and passwords are never printed in messages or logs.
 - The MCP server (phase 3)
 - Keychain storage
 - Garmin China accounts (`garmin.cn`)
-- Backup login methods, unless the Cloudflare test forces them
+- Password-based login (blocked for Java clients, see above)
 
 ## Credit
 
-The login flow is based on [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (MIT licence). We rewrite it in Java rather than copying code.
+The token swap and refresh are based on [python-garminconnect](https://github.com/cyberjunky/python-garminconnect) (MIT licence). We rewrite them in Java rather than copying code.

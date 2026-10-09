@@ -14,15 +14,15 @@ _Researched October 2026. This changes often, so check again before relying on i
 
 ## How the phone-app login works
 
-This is the "authenticate on the command line" idea. We copy what the Garmin Connect phone app does:
+This is the "authenticate on the command line" idea. We get the same tokens the Garmin Connect phone app uses:
 
-1. Send my email and password to Garmin's login page (`sso.garmin.com`).
-2. Enter the MFA code if Garmin asks for one.
-3. Swap the result for an **access token** and a **refresh token** (from `diauth.garmin.com`).
-4. Save the tokens to a private file on my machine.
-5. From then on, use the tokens to call Garmin's data endpoints, and refresh them when they run out.
+1. `stride-mcp login` opens Garmin's sign-in page in my browser. I log in there, MFA included.
+2. Garmin redirects to the phone-app address with a single-use **ticket** in it. I paste that address back into the terminal.
+3. stride-mcp swaps the ticket for an **access token** and a **refresh token** (from `diauth.garmin.com`).
+4. It saves the tokens to a private file on my machine.
+5. From then on, it uses the tokens to call Garmin's data endpoints, and refreshes them when they run out.
 
-My password is only needed for step 1. After that, only the tokens are used.
+stride-mcp never sees my password. Why we use the browser rather than a password prompt (Garmin blocks non-browser logins): see [Phase 1](phases/phase-1-login.md).
 
 ## What happened in March 2026
 
