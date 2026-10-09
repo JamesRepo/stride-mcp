@@ -73,7 +73,7 @@ Other projects report that plain clients sometimes still work, so **step 1 is a 
 ## Code layout
 
 ```
-com.stride.mcp
+com.hammez.stride
 ├── cli/          login, whoami, logout commands
 └── garmin/auth/
     ├── GarminSsoClient      step 1: email, password, MFA → service ticket
