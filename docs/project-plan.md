@@ -28,7 +28,7 @@ flowchart TB
 ## Phases
 
 ### Phase 1: Log in from the command line
-Detailed plan: [Phase 1](phase-1-login.md)
+Detailed plan: [Phase 1](phases/phase-1-login.md)
 - `stride-mcp login`: asks for email, password and MFA code, then saves tokens
 - `stride-mcp whoami`: checks the saved tokens still work
 - **Done when:** I can log in once and `whoami` still works days later.
