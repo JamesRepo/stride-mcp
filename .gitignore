@@ -1,0 +1,66 @@
+HELP.md
+target/
+.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+
+### STS ###
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+
+### IntelliJ IDEA ###
+.idea
+*.iws
+*.iml
+*.ipr
+
+### NetBeans ###
+/nbproject/private/
+/nbbuild/
+/dist/
+/nbdist/
+/.nb-gradle/
+build/
+!**/src/main/**/build/
+!**/src/test/**/build/
+
+### VS Code ###
+.vscode/
+
+### Eclipse ###
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+### macOS / Windows ###
+.DS_Store
+._*
+Thumbs.db
+desktop.ini
+
+### Logs & runtime ###
+*.log
+logs/
+*.pid
+hs_err_pid*
+replay_pid*
+
+### Secrets & local config ###
+.env
+.env.*
+!.env.example
+application-local.properties
+application-local.yml
+application-local.yaml
+*.pem
+*.key
+*.p12
+*.jks
+
+### Claude Code (local, per-user) ###
+.claude/settings.local.json
