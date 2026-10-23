@@ -4,6 +4,7 @@
 
 | Doc | Read it for |
 |---|---|
+| [Quick start](quick-start.md) | Build it, log in, check it works |
 | [Concepts](concepts.md) | What MCP is, and the other words we'll use |
 | [Getting Garmin data](garmin-access.md) | The ways in, and their risks |
 | [Project plan](project-plan.md) | What we're building, in what order |
