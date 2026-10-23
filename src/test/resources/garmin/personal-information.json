@@ -1,0 +1,27 @@
+{
+  "userInfo": {
+    "birthDate": "redacted",
+    "genderType": "redacted",
+    "email": "redacted",
+    "locale": "en",
+    "timeZone": "Europe/London",
+    "age": 0,
+    "countryCode": "GB"
+  },
+  "biometricProfile": {
+    "userId": 0,
+    "height": 0,
+    "weight": 0,
+    "vo2Max": 49.0,
+    "vo2MaxCycling": null,
+    "vo2MaxRowing": null,
+    "lactateThresholdHeartRate": 183.0,
+    "activityClass": 8,
+    "functionalThresholdPower": null,
+    "criticalSwimSpeed": null
+  },
+  "timeZone": "Europe/London",
+  "locale": "en",
+  "gender": "redacted",
+  "birthDate": "redacted"
+}

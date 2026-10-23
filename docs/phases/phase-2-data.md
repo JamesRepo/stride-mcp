@@ -4,7 +4,7 @@
 
 **Done when:** `stride-mcp activities --days 7 --type running` prints last week's runs.
 
-_Status: plan approved 23 October 2026. Step 2 (`GarminApi`) built and tested. Next: the `capture` command._
+_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`) and 4 (records and `GarminClient`) built and tested. Real samples captured 23 October 2026. Next: step 5, `GarminCache`._
 
 ## The commands
 
@@ -59,13 +59,31 @@ What python-garminconnect does that we copy (as behaviour, not code):
 - A 401 triggers one refresh and one retry.
 - Activities are fetched in pages of 20 until a page comes back empty. We stop earlier: when a page has fewer than 20, it was the last one. We also stop after 10 pages (200 activities) with a clear error, instead of paging forever.
 
-**To confirm with real samples:** the exact field names inside each reply, and whether `activityType=running` also returns trail and treadmill runs.
+### What the real replies showed (23 October 2026)
+
+From the owner's `capture` run. The fixtures made from it are in `src/test/resources/garmin/`.
+
+| Reply | Finding |
+|---|---|
+| Time zone | `timeZone` is at the top level (also in `userInfo.timeZone`), for example `Europe/London` |
+| Activity list | Times look like `2026-10-22 07:06:50`. The type is in `activityType.typeKey`. Heart rate and calories are decimals (`143.0`). |
+| One activity | Times look like `2026-10-22T07:06:50.0`. The type is in `activityTypeDTO.typeKey`, the totals in `summaryDTO`. The aerobic training effect is called `trainingEffect`. |
+| Activities without distance | Strength training, stair stepper, indoor cycling: Garmin sends `0.0` for distance and speed, and leaves out elevation |
+| Empty activity search | 200 with `[]`, not 204 |
+| Laps | In `lapDTOs`, numbered by `lapIndex` |
+| Daily summary | `totalSteps`, `dailyStepGoal`, `totalDistanceMeters`, `bodyBatteryHighestValue`… `privacyProtected: false` on both days |
+| Sleep | Start and end are epoch milliseconds (`sleepStartTimestampGMT`). The score is `sleepScores.overall.value`, its label `qualifierKey`. `sleepTimeSeconds` = deep + light + REM. |
+| A night with no sleep | **200, not 204**, with a `dailySleepDTO` whose fields are all null |
+
+**Still to confirm:** the newest activity was a stair stepper session, so a run's detail fields weren't seen: cadence, power and per-lap elevation. The parser accepts the likely names (`averageRunCadence`, `averagePower`, `elevationGain`) and the list's names (`averageRunningCadenceInStepsPerMinute`, `avgPower`). Capturing again after a run (into a new folder) would settle it. Also still open: whether `activityType=running` also returns trail and treadmill runs.
 
 ## Where the paths live
 
 A new record, `GarminDataConfig`, in `com.hammez.stride.garmin`, beside the data client. It holds every path, query parameter name, page size, page limit and cache lifetime from this doc. Nothing else hard-codes them.
 
-The Garmin address itself (`https://connectapi.garmin.com`) and the headers stay in `GarminAuthConfig`, because auth is what sends the requests.
+The Garmin address itself (`https://connectapi.garmin.com`) and the headers stay in `GarminAuthConfig`, because auth is what sends the requests. The `socialProfile` path is shared with the login's profile check, so `GarminDataConfig` takes it from `GarminAuthConfig`.
+
+Paths are templates (`/activity-service/activity/{activityId}`). `GarminDataConfig.fill(…)` puts the id or display name in, encoded with `GarminApi.segment(…)`. Step 3 added the paths and query names `capture` needs. The page limit and cache lifetimes come with steps 4 and 5.
 
 ```mermaid
 flowchart LR
@@ -141,7 +159,9 @@ No other retries, and never two refreshes for one request. Error text goes throu
 
 ## What each call returns
 
-Java records in `com.hammez.stride.garmin`. Only the useful fields, named for a reader, with the unit in the name. A field Garmin leaves out becomes `null`, never `0`.
+Java records in `com.hammez.stride.garmin`. Only the useful fields, named for a reader, with the unit in the name. A field Garmin leaves out becomes `null`, never `0`. (Garmin itself sends `0.0` for the distance of a strength session, and that's kept.)
+
+`GarminReplies` does the parsing. The overall shape is strict: a reply that isn't an object or list, or an activity with no id, is an `UnexpectedReplyException`. Single fields are lenient: missing, null or the wrong type becomes `null`. A 0–100 value outside that range (Garmin uses negatives for "no data") becomes `null`. `displayName` and the time zone are fetched once per `GarminClient` until the cache exists.
 
 ```java
 record ActivitySummary(
@@ -293,7 +313,33 @@ It makes about 10 calls, once each, with the cache turned off:
 | `summary-today.json`, `summary-past.json` | Today, and 30 days ago |
 | `sleep-last-night.json`, `sleep-none.json` | Last night, and 1 January 2000 (should have no sleep) |
 
-Each file holds the status code and the reply body, never headers, never tokens. The folder is created `700`, the files `600`. It prints a reminder that the files contain personal data.
+Each file holds the status code and the reply body, never headers, never tokens:
+
+| Reply | Saved as |
+|---|---|
+| 200 with JSON | `{"status": 200, "body": <the JSON>}` |
+| 200 that isn't JSON | `{"status": 200, "body": "<the text>"}` |
+| Empty (204) | `{"status": 204, "body": ""}`. `GarminApi` returns `""` for a 204, so an empty 200 would look the same. |
+| 404 | `{"status": 404, "message": "Garmin has nothing at … (HTTP 404)."}`. `GarminApi` doesn't pass on a 404's body. |
+
+How it works out the dates and the activity:
+
+- **Today** is today in the Garmin profile's time zone (`timeZone`, or `userInfo.timeZone`; which one is to confirm). If neither can be read, the computer's. It prints which it used.
+- **Last 7 days** is today and the 6 days before. One page: `start=0`, `limit=20`.
+- **The activity** is the first one in `activities.json` (newest first). If there are none in the last 7 days, it skips `activity.json` and `activity-splits.json` and says so.
+
+| What happens | It does |
+|---|---|
+| Any 404, an empty reply, an empty list | Saves it and carries on |
+| Not logged in, 401 after one refresh, 403, 429, 5xx, no connection, a profile with no `displayName` | Stops at once. Says why, which file it stopped at, and which files were saved. |
+
+The folder:
+
+- Created `700` when the first file is saved, if it doesn't exist. So a run that fails at the first call (not logged in, no connection) leaves no empty folder. Files are `600`, written atomically (temp file, then move).
+- An existing folder is used only if it's already `700` and holds none of the files above. So two runs never mix, and capture never changes the permissions of a folder you already had.
+- A folder that is itself a symlink is refused. Its parent folders are followed, as for the token file (on macOS, `/tmp` and `/var` are symlinks). All of this is checked before any call to Garmin.
+
+At the end it prints each file with its status, the date it used for today, and a reminder that the files contain personal data and need stripping (the checklist below).
 
 **Before sending them, remove or replace** (any value is fine, as long as the field stays):
 
@@ -316,8 +362,8 @@ I then turn them into fixtures under `src/test/resources/garmin/`, plus made-up 
 | `activity` id isn't a number | "Activity ids are numbers, like 20123456789." (exit code 2) |
 | Bad date | "Dates look like 2026-10-22." (exit code 2) |
 | `--days` out of range | "--days must be between 1 and 90." (exit code 2) |
-| Too many activities in the range | "More than 200 activities in that range. Try fewer --days." |
-| Daily summary has `privacyProtected` | "Garmin wouldn't share this day's summary. Run `stride-mcp login` again." |
+| Too many activities in the range | "More than 200 activities from 2026-07-01 to 2026-10-23. Try a shorter range." |
+| Daily summary has `privacyProtected` | "Garmin wouldn't share the summary for 2026-10-23. Run `stride-mcp login` again." |
 | A reply isn't the shape we expect | "Garmin's reply for … wasn't what stride-mcp expected. Garmin may have changed it. Check for an update." |
 | No sleep that night | Not an error: "No sleep recorded for the night ending Thu 23 Oct." |
 | No activities in the range | Not an error: "No activities in the last 7 days." |
@@ -330,8 +376,11 @@ com.hammez.stride
 ├── garmin/
 │   ├── GarminClient       the four calls, cache first, then GarminApi
 │   ├── GarminDataConfig   paths, params, page size, cache times
+│   ├── GarminReplies      JSON replies into records
+│   ├── UnexpectedReplyException  a reply that isn't the shape we expect
 │   ├── GarminCache        reply files under ~/.stride-mcp/cache
 │   ├── GarminSamples      the capture command's calls
+│   ├── PrivateFolder      700 folder, 600 files, atomic writes (capture now, the cache later)
 │   └── ActivitySummary, ActivityDetails, Lap, DailySummary, Sleep
 └── garmin/auth/
     ├── GarminApi          NEW: signed-in GET, refresh once on 401
@@ -359,9 +408,9 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 
 1. ✅ **Plan:** this doc. Approved 23 October 2026.
 2. ✅ **`GarminApi`** in `garmin/auth`, with `whoami` moved onto it, and the exception rename. Tests.
-3. **`capture` command.** Then the owner runs it and sends stripped samples.
-4. **Records and `GarminClient`**, parsed against fixtures made from the samples. Tests.
-5. **`GarminCache`**. Tests.
+3. ✅ **`capture` command.** Built and tested 23 October 2026. Next: the owner runs it and sends stripped samples.
+4. ✅ **Records and `GarminClient`**, parsed against fixtures made from the samples. Built and tested 23 October 2026.
+5. **`GarminCache`**. Tests. Also share the private-file code (`700` folder, `600` files, atomic writes) between `TokenStore`, `PrivateFolder` and the cache, in a package that `garmin/auth` can use without depending on the layers above it. Today `TokenStore` and `PrivateFolder` each have a copy (decided 23 October 2026).
 6. **CLI commands** `activities`, `activity`, `summary`, `sleep`. Tests.
 7. **Docs:** quick start, this doc, AGENTS.md status.
 8. **Live check** (owner): run each command, then run them again and see the cache answer.
