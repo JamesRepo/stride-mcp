@@ -13,7 +13,8 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 
 ## Current status
 
-- **Phase 1 (command-line login):** steps 2–7 built and tested (October 2026). Step 8, the live check by the owner, is still to do. Plan: `docs/phases/phase-1-login.md`.
+- **Phase 1 (command-line login):** built and tested. The owner ran `login` and `whoami` live on 23 October 2026 and both worked. Still to confirm: `whoami` still works days later. Plan: `docs/phases/phase-1-login.md`.
+- **Phase 2 (fetch real data):** plan approved. Step 2 (`GarminApi`, signed-in requests) built and tested. Next: step 3, the `capture` command. Plan: `docs/phases/phase-2-data.md`.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 

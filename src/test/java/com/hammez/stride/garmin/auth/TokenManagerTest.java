@@ -67,6 +67,16 @@ class TokenManagerTest {
     }
 
     @Test
+    void checkedTokensSaysWhetherItRefreshed() {
+        store.save(tokens("refresh-1", NOW.plus(Duration.ofMinutes(16)), NOW.plus(Duration.ofDays(20))));
+        assertThat(manager.checkedTokens().refreshed()).isFalse();
+
+        store.save(tokens("refresh-1", NOW.plus(Duration.ofMinutes(14)), NOW.plus(Duration.ofDays(20))));
+        garmin.respond(TOKEN_PATH, 200, tokenReply(jwt(NOW.getEpochSecond() + 75_600, CLIENT), "refresh-2"));
+        assertThat(manager.checkedTokens().refreshed()).isTrue();
+    }
+
+    @Test
     void refreshesAndSavesWithinFifteenMinutesOfExpiry() {
         store.save(tokens("refresh-1", NOW.plus(Duration.ofMinutes(14)), NOW.plus(Duration.ofDays(20))));
         String newAccess = jwt(NOW.getEpochSecond() + 75_600, CLIENT);

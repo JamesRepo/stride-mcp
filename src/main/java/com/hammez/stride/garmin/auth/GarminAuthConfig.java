@@ -17,7 +17,7 @@ import java.util.regex.Pattern;
  * @param ssoBaseUrl          Garmin's sign-in site, opened in the browser
  * @param serviceUrl          the phone-app address the browser is sent back to, with {@code ?ticket=ST-…}
  * @param diTokenUrl          where tickets and refresh tokens are swapped for new tokens
- * @param connectApiBaseUrl   Garmin Connect's API, used for the profile check
+ * @param connectApiBaseUrl   Garmin Connect's API, for the profile check and all data requests
  * @param serviceTicketGrantType the OAuth grant type for a ticket swap
  * @param clientIds           app client IDs to try, in order, for a ticket swap
  * @param nativeHeaders       headers the Garmin Android app sends on every API call
@@ -82,8 +82,9 @@ public record GarminAuthConfig(
         return ssoBaseUrl + "/sso/login?service=" + URLEncoder.encode(serviceUrl, StandardCharsets.UTF_8);
     }
 
-    public String profileUrl() {
-        return connectApiBaseUrl + "/userprofile-service/socialProfile";
+    /** The profile check's path on {@link #connectApiBaseUrl}. */
+    public String profilePath() {
+        return "/userprofile-service/socialProfile";
     }
 
     /** Native headers plus the given extras (extras win). */

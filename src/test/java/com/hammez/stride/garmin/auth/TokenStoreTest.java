@@ -122,7 +122,7 @@ class TokenStoreTest {
         Files.createSymbolicLink(dir(), elsewhere);
 
         assertThatThrownBy(() -> store().save(TOKENS))
-                .isInstanceOf(GarminAuthException.class).hasMessageContaining("is a link");
+                .isInstanceOf(GarminException.class).hasMessageContaining("is a link");
         assertThat(filesIn(elsewhere)).isEmpty();
     }
 
@@ -133,7 +133,7 @@ class TokenStoreTest {
         Files.createSymbolicLink(file(), target);
 
         assertThatThrownBy(() -> store().load())
-                .isInstanceOf(GarminAuthException.class).hasMessageContaining("is a link");
+                .isInstanceOf(GarminException.class).hasMessageContaining("is a link");
     }
 
     @Test
@@ -155,7 +155,7 @@ class TokenStoreTest {
         Files.writeString(file(), "{\"accessToken\":\"secret-access\",");
 
         assertThatThrownBy(() -> store().load())
-                .isInstanceOf(GarminAuthException.class)
+                .isInstanceOf(GarminException.class)
                 .hasMessageContaining("unreadable")
                 .hasNoCause()
                 .message().doesNotContain("secret-access");
@@ -166,7 +166,7 @@ class TokenStoreTest {
         Files.createDirectory(dir());
         Files.writeString(file(), "{\"accessToken\":\"a\"}");
 
-        assertThatThrownBy(() -> store().load()).isInstanceOf(GarminAuthException.class).hasMessageContaining("unreadable");
+        assertThatThrownBy(() -> store().load()).isInstanceOf(GarminException.class).hasMessageContaining("unreadable");
     }
 
     @Test
@@ -191,9 +191,9 @@ class TokenStoreTest {
             Files.writeString(file, "{}");
             TokenStore store = new TokenStore(file, json);
 
-            assertThatThrownBy(store::load).isExactlyInstanceOf(GarminAuthException.class)
+            assertThatThrownBy(store::load).isExactlyInstanceOf(GarminException.class)
                     .hasMessageContaining("doesn't support Unix file permissions");
-            assertThatThrownBy(() -> store.save(TOKENS)).isExactlyInstanceOf(GarminAuthException.class)
+            assertThatThrownBy(() -> store.save(TOKENS)).isExactlyInstanceOf(GarminException.class)
                     .hasMessageContaining("doesn't support Unix file permissions");
         }
     }

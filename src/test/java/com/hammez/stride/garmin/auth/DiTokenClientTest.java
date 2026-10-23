@@ -129,7 +129,7 @@ class DiTokenClientTest {
         garmin.respond(TOKEN_PATH, 403, "<html>blocked</html>");
 
         assertThat(catchThrowable(() -> client.exchangeTicket(TICKET)))
-                .isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 403");
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 403");
         assertThat(garmin.requests()).hasSize(1);
     }
 
@@ -138,7 +138,7 @@ class DiTokenClientTest {
         garmin.respond(TOKEN_PATH, 403, "");
 
         assertThat(catchThrowable(() -> client.refresh(saved("refresh-1"))))
-                .isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 403");
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 403");
     }
 
     @Test
@@ -147,7 +147,7 @@ class DiTokenClientTest {
 
         Throwable thrown = catchThrowable(() -> client.exchangeTicket(TICKET));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 503");
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 503");
         assertNoSecrets(thrown);
         assertThat(garmin.requests()).hasSize(1);
     }
@@ -157,7 +157,7 @@ class DiTokenClientTest {
         garmin.respond(TOKEN_PATH, 200, "{\"token_type\":\"Bearer\"}");
 
         assertThat(catchThrowable(() -> client.exchangeTicket(TICKET)))
-                .isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("missing a token");
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("missing a token");
     }
 
     @Test
@@ -203,7 +203,7 @@ class DiTokenClientTest {
 
         Throwable thrown = catchThrowable(() -> client.refresh(saved("refresh-1")));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 500");
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500");
         assertThat(thrown.getMessage()).doesNotContain("refresh-1");
     }
 
@@ -214,7 +214,7 @@ class DiTokenClientTest {
 
             Throwable thrown = catchThrowable(() -> client.exchangeTicket(TICKET));
 
-            assertThat(thrown).isExactlyInstanceOf(GarminAuthException.class)
+            assertThat(thrown).isExactlyInstanceOf(GarminException.class)
                     .hasMessageContaining("HTTP 400").hasMessageContaining("Run `stride-mcp login` again");
             assertNoSecrets(thrown);
         }
@@ -252,7 +252,7 @@ class DiTokenClientTest {
 
         Throwable thrown = catchThrowable(() -> client.refresh(saved("refresh-1")));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("invalid_request");
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("invalid_request");
         assertNoSecrets(thrown);
     }
 

@@ -12,7 +12,9 @@ import tools.jackson.databind.json.JsonMapper;
 class ProfileClientTest {
 
     private final FakeGarmin garmin = new FakeGarmin();
-    private final ProfileClient client = new ProfileClient(garmin.httpClient(), garmin.config(), JsonMapper.builder().build());
+    // fetch(accessToken) never touches the saved session, so there's no token manager.
+    private final ProfileClient client = new ProfileClient(
+            new GarminApi(garmin.httpClient(), garmin.config(), null), garmin.config(), JsonMapper.builder().build());
 
     @AfterEach
     void stop() {
@@ -48,6 +50,22 @@ class ProfileClientTest {
     }
 
     @Test
+    void anEmptyReplyIsNotAProfile() {
+        garmin.respond(PROFILE_PATH, 204, "");
+
+        assertThat(catchThrowable(() -> client.fetch("access-1")))
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("wasn't a profile (it was empty)");
+    }
+
+    @Test
+    void aPageThatIsntJsonIsNotAProfile() {
+        garmin.respond(PROFILE_PATH, 200, "<html><body>Checking your browser…</body></html>");
+
+        assertThat(catchThrowable(() -> client.fetch("access-1")))
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("wasn't a profile");
+    }
+
+    @Test
     void rejectedTokenMeansSessionExpired() {
         garmin.respond(PROFILE_PATH, 401, "");
 
@@ -59,7 +77,7 @@ class ProfileClientTest {
         garmin.respond(PROFILE_PATH, 403, "");
 
         assertThat(catchThrowable(() -> client.fetch("access-1")))
-                .isExactlyInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 403");
+                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 403");
     }
 
     @Test

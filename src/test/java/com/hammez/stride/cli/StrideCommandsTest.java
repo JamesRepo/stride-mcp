@@ -19,9 +19,11 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.hammez.stride.garmin.auth.BrowserLogin;
+import com.hammez.stride.garmin.auth.GarminApi;
 import com.hammez.stride.garmin.auth.GarminAuth;
 import com.hammez.stride.garmin.auth.GarminAuthConfig;
 import com.hammez.stride.garmin.auth.GarminTokens;
+import com.hammez.stride.garmin.auth.ProfileClient;
 import com.hammez.stride.garmin.auth.TokenManager;
 import com.hammez.stride.garmin.auth.TokenStore;
 
@@ -42,8 +44,10 @@ class StrideCommandsTest {
     void setUp() {
         store = new TokenStore(temp.resolve("garmin_tokens.json"), JsonMapper.builder().build());
         // Nothing here should talk to Garmin, so the HTTP pieces are left out.
-        var auth = new GarminAuth(new BrowserLogin(GarminAuthConfig.defaults(), url -> true), null, null,
-                new TokenManager(store, null, GarminAuthConfig.defaults(), Clock.systemUTC()), store);
+        GarminAuthConfig config = GarminAuthConfig.defaults();
+        var api = new GarminApi(null, config, new TokenManager(store, null, config, Clock.systemUTC()));
+        var auth = new GarminAuth(new BrowserLogin(config, url -> true), null,
+                new ProfileClient(api, config, JsonMapper.builder().build()), store);
         commands = new StrideCommands(auth,
                 new CliIo(new BufferedReader(new StringReader("not an address\n")),
                         new PrintStream(out, true, StandardCharsets.UTF_8),

@@ -49,18 +49,23 @@ class GarminAuthBeans {
     }
 
     @Bean
-    ProfileClient profileClient(HttpClient garminHttpClient, GarminAuthConfig config, JsonMapper json) {
-        return new ProfileClient(garminHttpClient, config, json);
-    }
-
-    @Bean
     TokenManager tokenManager(TokenStore store, DiTokenClient tokenClient, GarminAuthConfig config, Clock clock) {
         return new TokenManager(store, tokenClient, config, clock);
     }
 
     @Bean
+    GarminApi garminApi(HttpClient garminHttpClient, GarminAuthConfig config, TokenManager tokenManager) {
+        return new GarminApi(garminHttpClient, config, tokenManager);
+    }
+
+    @Bean
+    ProfileClient profileClient(GarminApi garminApi, GarminAuthConfig config, JsonMapper json) {
+        return new ProfileClient(garminApi, config, json);
+    }
+
+    @Bean
     GarminAuth garminAuth(BrowserLogin browserLogin, DiTokenClient tokenClient, ProfileClient profileClient,
-            TokenManager tokenManager, TokenStore store) {
-        return new GarminAuth(browserLogin, tokenClient, profileClient, tokenManager, store);
+            TokenStore store) {
+        return new GarminAuth(browserLogin, tokenClient, profileClient, store);
     }
 }

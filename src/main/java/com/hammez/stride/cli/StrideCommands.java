@@ -12,7 +12,7 @@ import org.springframework.boot.ExitCodeGenerator;
 
 import com.hammez.stride.garmin.auth.GarminAuth;
 import com.hammez.stride.garmin.auth.GarminAuth.WhoAmI;
-import com.hammez.stride.garmin.auth.GarminAuthException;
+import com.hammez.stride.garmin.auth.GarminException;
 
 /**
  * The {@code login}, {@code whoami} and {@code logout} commands. Runs one command and sets the exit code:
@@ -70,7 +70,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
                 }
             }
             return 0;
-        } catch (GarminAuthException e) {
+        } catch (GarminException e) {
             io.err().println(e.getMessage());
             return 1;
         } catch (UncheckedIOException e) {

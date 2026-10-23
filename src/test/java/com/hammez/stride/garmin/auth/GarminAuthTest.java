@@ -51,9 +51,9 @@ class GarminAuthTest {
         GarminAuthConfig config = garmin.config();
         store = new TokenStore(temp.resolve("garmin_tokens.json"), json);
         var tokenClient = new DiTokenClient(garmin.httpClient(), config, json, clock);
+        var api = new GarminApi(garmin.httpClient(), config, new TokenManager(store, tokenClient, config, clock));
         auth = new GarminAuth(new BrowserLogin(config, url -> true), tokenClient,
-                new ProfileClient(garmin.httpClient(), config, json),
-                new TokenManager(store, tokenClient, config, clock), store);
+                new ProfileClient(api, config, json), store);
     }
 
     @AfterEach
@@ -85,8 +85,35 @@ class GarminAuthTest {
         garmin.respond(TOKEN_PATH, 200, tokenReply(jwt(NOW.getEpochSecond() + 75_600, CLIENT), "refresh-1"))
                 .respond(PROFILE_PATH, 500, "oops");
 
-        assertThatThrownBy(() -> login(TICKET)).isInstanceOf(GarminAuthException.class).hasMessageContaining("HTTP 500");
+        assertThatThrownBy(() -> login(TICKET)).isInstanceOf(GarminException.class).hasMessageContaining("HTTP 500");
         assertThat(store.load()).isEmpty();
+    }
+
+    @Test
+    void loginSavesNothingIfTheProfileReplyIsEmpty() {
+        garmin.respond(TOKEN_PATH, 200, tokenReply(jwt(NOW.getEpochSecond() + 75_600, CLIENT), "refresh-1"))
+                .respond(PROFILE_PATH, 204, "");
+
+        assertThatThrownBy(() -> login(TICKET)).isInstanceOf(GarminException.class).hasMessageContaining("wasn't a profile");
+        assertThat(store.load()).isEmpty();
+    }
+
+    @Test
+    void loginSavesNothingIfTheProfileReplyIsntJson() {
+        garmin.respond(TOKEN_PATH, 200, tokenReply(jwt(NOW.getEpochSecond() + 75_600, CLIENT), "refresh-1"))
+                .respond(PROFILE_PATH, 200, "<html>Just a moment…</html>");
+
+        assertThatThrownBy(() -> login(TICKET)).isInstanceOf(GarminException.class).hasMessageContaining("wasn't a profile");
+        assertThat(store.load()).isEmpty();
+    }
+
+    @Test
+    void whoamiFailsIfTheProfileReplyIsEmpty() {
+        store.save(new GarminTokens(jwt(NOW.getEpochSecond() + 3600, CLIENT), "refresh-1", CLIENT,
+                NOW.plusSeconds(3600), NOW.plusSeconds(86_400)));
+        garmin.respond(PROFILE_PATH, 204, "");
+
+        assertThatThrownBy(() -> auth.whoami()).isInstanceOf(GarminException.class).hasMessageContaining("wasn't a profile");
     }
 
     @Test

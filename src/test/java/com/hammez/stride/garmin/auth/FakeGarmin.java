@@ -32,15 +32,24 @@ final class FakeGarmin implements AutoCloseable {
     record Response(int status, String body) {
     }
 
-    record Request(String method, String path, Headers headers, String body) {
+    /** @param query the raw query string, or null if there was none */
+    record Request(String method, String path, String query, Headers headers, String body) {
 
         String header(String name) {
             return headers.getFirst(name);
         }
 
         Map<String, String> form() {
+            return decode(body);
+        }
+
+        Map<String, String> queryParams() {
+            return query == null ? Map.of() : decode(query);
+        }
+
+        private static Map<String, String> decode(String pairs) {
             var fields = new LinkedHashMap<String, String>();
-            for (String pair : body.split("&")) {
+            for (String pair : pairs.split("&")) {
                 int eq = pair.indexOf('=');
                 fields.put(URLDecoder.decode(pair.substring(0, eq), StandardCharsets.UTF_8),
                         URLDecoder.decode(pair.substring(eq + 1), StandardCharsets.UTF_8));
@@ -62,7 +71,8 @@ final class FakeGarmin implements AutoCloseable {
         server.createContext("/", exchange -> {
             String path = exchange.getRequestURI().getPath();
             String body = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
-            requests.add(new Request(exchange.getRequestMethod(), path, exchange.getRequestHeaders(), body));
+            requests.add(new Request(exchange.getRequestMethod(), path, exchange.getRequestURI().getRawQuery(),
+                    exchange.getRequestHeaders(), body));
             Deque<Response> queue = responses.get(path);
             Response response = queue == null || queue.isEmpty()
                     ? new Response(500, "{\"error\":\"no fake response queued\"}")

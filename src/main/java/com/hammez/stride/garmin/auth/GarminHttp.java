@@ -23,11 +23,11 @@ final class GarminHttp {
         try {
             return http.send(request, HttpResponse.BodyHandlers.ofString());
         } catch (IOException e) {
-            throw new GarminAuthException("Couldn't reach Garmin (" + e.getClass().getSimpleName()
+            throw new GarminException("Couldn't reach Garmin (" + e.getClass().getSimpleName()
                     + "). Check your internet connection and try again.", e);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new GarminAuthException("Interrupted while waiting for Garmin.", e);
+            throw new GarminException("Interrupted while waiting for Garmin.", e);
         }
     }
 
@@ -40,8 +40,13 @@ final class GarminHttp {
 
     /** The JSON body, or a missing node if it isn't JSON. */
     static JsonNode jsonBody(HttpResponse<String> response, JsonMapper json) {
+        return jsonBody(response.body(), json);
+    }
+
+    /** The JSON in a body, or a missing node if it isn't JSON. */
+    static JsonNode jsonBody(String body, JsonMapper json) {
         try {
-            return json.readTree(response.body());
+            return json.readTree(body);
         } catch (JacksonException e) {
             return json.missingNode();
         }
@@ -53,19 +58,19 @@ final class GarminHttp {
     }
 
     /** HTTP 403: Garmin (or its bot protection) refused us. Never worth retrying straight away. */
-    static GarminAuthException forbidden(String step) {
-        return new GarminAuthException("Garmin refused the request during " + step + " (HTTP 403). "
+    static GarminException forbidden(String step) {
+        return new GarminException("Garmin refused the request during " + step + " (HTTP 403). "
                 + "It may be blocking this connection. Wait a while before trying again.");
     }
 
-    static GarminAuthException unexpected(String step, HttpResponse<String> response, String... secrets) {
-        return new GarminAuthException("Garmin returned HTTP " + response.statusCode() + " during " + step
+    static GarminException unexpected(String step, HttpResponse<String> response, String... secrets) {
+        return new GarminException("Garmin returned HTTP " + response.statusCode() + " during " + step
                 + ". Try again later. Response: " + Redactor.redact(response.body(), secrets));
     }
 
     /** HTTP 400 or 401 with an error we don't recognise. Logging in again is the likely fix. */
-    static GarminAuthException rejected(String step, HttpResponse<String> response, String... secrets) {
-        return new GarminAuthException("Garmin rejected " + step + " (HTTP " + response.statusCode() + "). "
+    static GarminException rejected(String step, HttpResponse<String> response, String... secrets) {
+        return new GarminException("Garmin rejected " + step + " (HTTP " + response.statusCode() + "). "
                 + "Run `stride-mcp login` again. If it keeps failing, check for an update to stride-mcp. "
                 + "Response: " + Redactor.redact(response.body(), secrets));
     }

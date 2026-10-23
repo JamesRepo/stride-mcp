@@ -29,12 +29,21 @@ public class TokenManager {
      * @throws SessionExpiredException if the refresh token has run out or is rejected
      */
     public GarminTokens validTokens() {
+        return checkedTokens().tokens();
+    }
+
+    /** Tokens from {@link #validTokens()}, and whether getting them took a refresh. */
+    record Checked(GarminTokens tokens, boolean refreshed) {
+    }
+
+    /** As {@link #validTokens()}, but also says whether it just refreshed. */
+    Checked checkedTokens() {
         return store.underLock(() -> {
             GarminTokens tokens = store.load().orElseThrow(NotLoggedInException::new);
             if (tokens.accessTokenExpiresAt().isAfter(clock.instant().plus(config.refreshMargin()))) {
-                return tokens;
+                return new Checked(tokens, false);
             }
-            return refreshAndSave(tokens);
+            return new Checked(refreshAndSave(tokens), true);
         });
     }
 

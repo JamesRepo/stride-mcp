@@ -141,7 +141,7 @@ public class DiTokenClient {
         String accessToken = body.path("access_token").asString("");
         String refreshToken = body.path("refresh_token").asString("");
         if (accessToken.isBlank() || refreshToken.isBlank()) {
-            throw new GarminAuthException("Garmin's token reply was missing a token. "
+            throw new GarminException("Garmin's token reply was missing a token. "
                     + "Its login may have changed. Check for an update to stride-mcp.");
         }
         Instant now = clock.instant();
@@ -150,7 +150,7 @@ public class DiTokenClient {
         Instant accessExpiry = jwt.expiresAt().orElseGet(() -> {
             JsonNode expiresIn = body.path("expires_in");
             if (!expiresIn.isNumber()) {
-                throw new GarminAuthException("Garmin's token reply had no expiry time. "
+                throw new GarminException("Garmin's token reply had no expiry time. "
                         + "Its login may have changed. Check for an update to stride-mcp.");
             }
             return now.plusSeconds(expiresIn.asLong());

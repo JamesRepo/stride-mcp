@@ -10,6 +10,7 @@
 | [Project plan](project-plan.md) | What we're building, in what order |
 | [Running it](running.md) | Where it runs, and how an AI app connects to it |
 | [Phase 1: Login](phases/phase-1-login.md) | Detailed plan for the command-line login |
+| [Phase 2: Data](phases/phase-2-data.md) | Detailed plan for fetching activities, daily summary and sleep |
 
 ## The short version
 

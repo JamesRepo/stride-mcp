@@ -34,6 +34,7 @@ Detailed plan: [Phase 1](phases/phase-1-login.md)
 - **Done when:** I can log in once and `whoami` still works days later.
 
 ### Phase 2: Fetch real data
+Detailed plan: [Phase 2](phases/phase-2-data.md)
 - Recent activities, one activity's details, daily summary, sleep
 - Simple caching so we don't hit Garmin repeatedly
 - **Done when:** a small command prints last week's runs.

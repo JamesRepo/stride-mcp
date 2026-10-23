@@ -13,15 +13,13 @@ public class GarminAuth {
     private final BrowserLogin browserLogin;
     private final DiTokenClient tokenClient;
     private final ProfileClient profileClient;
-    private final TokenManager tokenManager;
     private final TokenStore store;
 
     public GarminAuth(BrowserLogin browserLogin, DiTokenClient tokenClient, ProfileClient profileClient,
-            TokenManager tokenManager, TokenStore store) {
+            TokenStore store) {
         this.browserLogin = browserLogin;
         this.tokenClient = tokenClient;
         this.profileClient = profileClient;
-        this.tokenManager = tokenManager;
         this.store = store;
     }
 
@@ -41,18 +39,11 @@ public class GarminAuth {
 
     /**
      * Fetches the profile with the saved tokens, refreshing them first if needed. If Garmin turns down
-     * an access token that should still be good, refreshes once and tries once more.
+     * an access token that should still be good, refreshes once and tries once more (see {@link GarminApi}).
      */
     public WhoAmI whoami() {
-        GarminTokens tokens = tokenManager.validTokens();
-        GarminProfile profile;
-        try {
-            profile = profileClient.fetch(tokens.accessToken());
-        } catch (SessionExpiredException e) {
-            tokens = tokenManager.refreshRejected(tokens);
-            profile = profileClient.fetch(tokens.accessToken());
-        }
-        return new WhoAmI(profile, tokens.accessTokenExpiresAt(), tokens.refreshTokenExpiresAt());
+        ProfileClient.SignedProfile me = profileClient.fetchSaved();
+        return new WhoAmI(me.profile(), me.tokens().accessTokenExpiresAt(), me.tokens().refreshTokenExpiresAt());
     }
 
     /** Deletes the saved tokens. Returns false if there were none. */

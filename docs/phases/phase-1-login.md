@@ -136,7 +136,7 @@ com.hammez.stride
     └── GarminAuthConfig     URLs, client IDs, headers (the bits Garmin changes)
 ```
 
-Also in `garmin/auth/`: `ProfileClient` (the profile check), `GarminAuth` (what the commands call, so tickets and tokens never leave `garmin/auth`) and `Redactor` (strips tickets and tokens from Garmin error text).
+Also in `garmin/auth/`: `ProfileClient` (the profile check), `GarminApi` (signed-in requests, added in [phase 2](phase-2-data.md)), `GarminAuth` (what the commands call, so tickets and tokens never leave `garmin/auth`) and `Redactor` (strips tickets and tokens from Garmin error text).
 
 **Tools:** Java's built-in HTTP client and Jackson 3 (already part of Spring Boot). No new libraries.
 
@@ -186,7 +186,7 @@ Tickets and tokens are never printed in messages or logs.
 5. ✅ **DiTokenClient:** ticket-for-tokens swap, and refresh.
 6. ✅ **TokenManager + whoami:** load tokens, refresh if close to expiry, save, then fetch my profile.
 7. ✅ **Tests:** each part tested against a fake Garmin server (no real logins), covering success, bad paste, rejected ticket, unknown client IDs, 429 and an expired refresh token.
-8. **Live check:** log in for real, run `whoami` over several days, and update these docs with what we learn.
+8. 🟡 **Live check:** `login` and `whoami` worked for real on 23 October 2026. **Still to confirm:** `whoami` still works days later, after the access token (~21 hours) has run out and been refreshed.
 
 ## Not in phase 1
 

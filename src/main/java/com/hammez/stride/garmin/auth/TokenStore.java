@@ -65,7 +65,7 @@ public class TokenStore {
             }
             requireRealDirectory();
             if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) {
-                throw new GarminAuthException("Token file " + file + " is a link or not a regular file. "
+                throw new GarminException("Token file " + file + " is a link or not a regular file. "
                         + "Run `stride-mcp logout`, then `stride-mcp login`.");
             }
             setPermissions(dir, DIR_PERMISSIONS);
@@ -93,7 +93,7 @@ public class TokenStore {
             Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
             temp = null;
         } catch (AtomicMoveNotSupportedException e) {
-            throw new GarminAuthException("Can't save tokens safely: " + dir + " doesn't support atomic moves.", e);
+            throw new GarminException("Can't save tokens safely: " + dir + " doesn't support atomic moves.", e);
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
@@ -163,13 +163,13 @@ public class TokenStore {
 
     private void requireRealDirectory() {
         if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
-            throw new GarminAuthException("Token folder " + dir + " is a link or not a folder. "
+            throw new GarminException("Token folder " + dir + " is a link or not a folder. "
                     + "Remove it, then run `stride-mcp login`.");
         }
     }
 
-    private GarminAuthException noUnixPermissions(UnsupportedOperationException e) {
-        return new GarminAuthException("Can't keep tokens private: " + dir + " doesn't support Unix file permissions. "
+    private GarminException noUnixPermissions(UnsupportedOperationException e) {
+        return new GarminException("Can't keep tokens private: " + dir + " doesn't support Unix file permissions. "
                 + "Use a folder on your main disk (see --stride.token-file).", e);
     }
 
@@ -212,7 +212,7 @@ public class TokenStore {
                     refreshExpiry == null ? null : Instant.parse(refreshExpiry));
         } catch (JacksonException | DateTimeParseException | IllegalStateException e) {
             // Don't attach the cause: its message could quote the file's contents.
-            throw new GarminAuthException("Token file " + file + " is unreadable. "
+            throw new GarminException("Token file " + file + " is unreadable. "
                     + "Run `stride-mcp logout`, then `stride-mcp login`.");
         }
     }
