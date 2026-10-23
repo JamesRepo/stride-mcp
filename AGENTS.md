@@ -13,7 +13,7 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 
 ## Current status
 
-- **Phase 1 (command-line login):** in progress. Plan: `docs/phases/phase-1-login.md`.
+- **Phase 1 (command-line login):** steps 2–7 built and tested (October 2026). Step 8, the live check by the owner, is still to do. Plan: `docs/phases/phase-1-login.md`.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 

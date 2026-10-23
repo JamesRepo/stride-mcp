@@ -7,7 +7,8 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 public class StrideMcpApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(StrideMcpApplication.class, args);
+		// The commands run once and exit with their own exit code.
+		System.exit(SpringApplication.exit(SpringApplication.run(StrideMcpApplication.class, args)));
 	}
 
 }
