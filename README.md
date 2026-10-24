@@ -2,7 +2,7 @@
 
 Let AI apps read my Garmin data, using [MCP](https://modelcontextprotocol.io). Works with any MCP client, such as Claude or ChatGPT.
 
-> **Status (October 2026):** early. Phase 1 (command-line login) is done. Phase 2's data commands (activities, one activity, daily summary, sleep) are built and waiting for the owner's live check. It can't talk to an AI app yet. See [the plan](docs/project-plan.md).
+> **Status (October 2026):** early. Phase 1 (command-line login) and phase 2 (reading activities, one activity, daily summary and sleep on the command line, with a cache) are done. It can't talk to an AI app yet: that's phase 3. See [the plan](docs/project-plan.md).
 
 ## How it works
 

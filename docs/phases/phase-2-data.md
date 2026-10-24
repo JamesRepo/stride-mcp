@@ -4,7 +4,7 @@
 
 **Done when:** `stride-mcp activities --days 7 --type running` prints last week's runs.
 
-_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`), 5 (`GarminCache`) and 6 (the CLI commands) built and tested. Real samples captured 23 October 2026. Step 7 (docs) done 24 October 2026. Next: the owner's live check (step 8)._
+_Status: **done 24 October 2026.** All 8 steps finished, including the owner's live check (see [What the live check showed](#what-the-live-check-showed-24-october-2026)). One question still open: whether `--type running` also finds trail and treadmill runs. Next: phase 3, the MCP server._
 
 ## The commands
 
@@ -56,7 +56,7 @@ Lap  Distance  Time   Pace  Avg HR  Max HR  Elevation
 1           –  10:02  –     142     158     –
 ```
 
-A run also shows `Distance`, `Time 36:01 (moving 35:51)`, `Pace 7:08 /km, fastest 4:30 /km`, `Elevation gain`, `Cadence … steps/min` and `Power … W`, and its laps fill in distance and pace. The start is the time on the clock where the activity happened.
+A run also shows `Distance`, `Time 36:01 (moving 35:51)`, `Pace 7:08 /km, fastest 5:48 /km`, `Elevation gain 18 m`, `Cadence 153 steps/min` and `Power 319 W`, and its laps fill in distance, pace and elevation (seen on a real run in the live check, 24 October 2026). The start is the time on the clock where the activity happened.
 
 ```
 $ stride-mcp summary 2026-10-23
@@ -146,7 +146,26 @@ From the owner's `capture` run. The fixtures made from it are in `src/test/resou
 | Sleep | Start and end are epoch milliseconds (`sleepStartTimestampGMT`). The score is `sleepScores.overall.value`, its label `qualifierKey`. `sleepTimeSeconds` = deep + light + REM. |
 | A night with no sleep | **200, not 204**, with a `dailySleepDTO` whose fields are all null |
 
-**Still to confirm:** the newest activity was a stair stepper session, so a run's detail fields weren't seen: cadence, power and per-lap elevation. The parser accepts the likely names (`averageRunCadence`, `averagePower`, `elevationGain`) and the list's names (`averageRunningCadenceInStepsPerMinute`, `avgPower`). Capturing again after a run (into a new folder) would settle it. Also still open: whether `activityType=running` also returns trail and treadmill runs.
+The newest activity in the samples was a stair stepper session, so a run's detail fields weren't seen there: cadence, power and per-lap elevation. The parser accepts the likely names (`averageRunCadence`, `averagePower`, `elevationGain`) and the list's names (`averageRunningCadenceInStepsPerMinute`, `avgPower`). **Confirmed 24 October 2026:** the live check's real run showed all three, so one of these names matches. Which one isn't known, because no sample of a run was captured.
+
+**Still to confirm:** whether `activityType=running` also returns trail and treadmill runs. The owner had none in the last 90 days.
+
+### What the live check showed (24 October 2026)
+
+The owner ran each command against their real account (step 8).
+
+| Check | Result |
+|---|---|
+| Done when: `activities --days 7 --type running` | ✅ Printed last week's 3 runs |
+| `activity` on a real run | ✅ Cadence, power, elevation gain, and each lap's distance, pace and elevation |
+| `summary`, `sleep` | ✅ Same layout as the fixtures |
+| "Today" | ✅ Sat 24 Oct, so `--days 90` = Mon 27 Jul to Sat 24 Oct |
+| Paging | ✅ 60 activities in 90 days: 3 full pages, then an empty 4th, then stop. 24 runs: a page of 20, then 4. |
+| Cache | ✅ A second run saved nothing new, so it was answered from the cache. `--no-cache` saved a new copy. The profile and time zone fetched in the morning were reused in the evening. Folder `700`, files `600`. |
+| Token refresh | ✅ The access token had run out. The first data command refreshed it by itself and worked. |
+| Sizes | A sleep reply is about 215 KB (it holds the night's charts). 90 days of activities is about 315 KB, over 4 pages. |
+| Old files | A file past its lifetime stays on disk until that same request is made again, or until `logout`. As designed. |
+| Odd data | A 0.19 km "run" (17:03 long, 90:05 /km) printed as Garmin recorded it |
 
 ## Where the paths live
 
@@ -515,7 +534,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 5. ✅ **`GarminCache`**. Tests. The private-file code is now shared in `com.hammez.stride.files` (decided and built 23 October 2026). See [How it works](#how-it-works-built-23-october-2026).
 6. ✅ **CLI commands** `activities`, `activity`, `summary`, `sleep`, with `--no-cache`. Tests. `GarminCache.problem()` goes to stderr after a data command, so a cache that can't be used isn't silent. Built and tested 24 October 2026. See [What they print](#what-they-print-built-24-october-2026) and [How options are read](#how-options-are-read-decided-24-october-2026).
 7. ✅ **Docs:** quick start, this doc, AGENTS.md status. Done 24 October 2026. See [Quick start](../quick-start.md#4-read-your-data).
-8. **Live check** (owner): run each command, then run them again and see the cache answer.
+8. ✅ **Live check** (owner): run each command, then run them again and see the cache answer. Done 24 October 2026. See [What the live check showed](#what-the-live-check-showed-24-october-2026).
 
 ## Not in phase 2
 

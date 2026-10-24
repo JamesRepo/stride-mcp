@@ -105,7 +105,7 @@ Lap  Distance  Time   Pace  Avg HR  Max HR  Elevation
 1           –  10:02  –     142     158     –
 ```
 
-`–` means Garmin has no value. A run also fills in distance and pace. The start is the time on the clock where you did it.
+`–` means Garmin has no value. A run also shows distance, pace, elevation gain, cadence and power, and its laps fill in distance, pace and elevation. The start is the time on the clock where you did it.
 
 ### Daily summary
 

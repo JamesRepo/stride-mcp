@@ -13,8 +13,9 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 
 ## Current status
 
-- **Phase 1 (command-line login):** built and tested. The owner ran `login` and `whoami` live on 23 October 2026 and both worked. Still to confirm: `whoami` still works days later. Plan: `docs/phases/phase-1-login.md`.
-- **Phase 2 (fetch real data):** plan approved. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`), 5 (`GarminCache`, shared `files.PrivateFolder`) and 6 (CLI commands `activities`, `activity`, `summary`, `sleep` with `--no-cache`) built and tested. Fixtures from real replies (23 October 2026) are in `src/test/resources/garmin/`. Step 7 (docs: quick start) done 24 October 2026. Next: step 8, the owner's live check (run each command, then again to see the cache answer). Plan: `docs/phases/phase-2-data.md`.
+- **Phase 1 (command-line login):** built and tested. The owner ran `login` and `whoami` live on 23 October 2026 and both worked. The first automatic token refresh worked live on 24 October 2026. Still to confirm: it still works days later. Plan: `docs/phases/phase-1-login.md`.
+- **Phase 2 (fetch real data):** done 24 October 2026. The CLI commands `activities`, `activity`, `summary` and `sleep` (with `--no-cache`) and the reply cache are built and tested, and passed the owner's live check. Fixtures from real replies (23 October 2026) are in `src/test/resources/garmin/`. Still open: whether `--type running` also returns trail and treadmill runs. Plan and live-check results: `docs/phases/phase-2-data.md`.
+- **Phase 3 (MCP server):** not started. Don't start it unless asked.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 
