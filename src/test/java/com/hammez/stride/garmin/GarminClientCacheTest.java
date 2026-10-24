@@ -5,9 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
 import java.io.IOException;
-import java.io.InputStream;
 import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
@@ -472,13 +470,6 @@ class GarminClientCacheTest {
     }
 
     private static String fixture(String name) {
-        try (InputStream in = GarminClientCacheTest.class.getResourceAsStream("/garmin/" + name)) {
-            if (in == null) {
-                throw new IllegalArgumentException("No fixture " + name);
-            }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        return Fixtures.read(name);
     }
 }

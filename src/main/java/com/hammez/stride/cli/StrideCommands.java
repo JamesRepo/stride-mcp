@@ -4,15 +4,21 @@ import java.io.UncheckedIOException;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ExitCodeGenerator;
 
+import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.GarminCache;
+import com.hammez.stride.garmin.GarminClient;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.GarminSamples.Capture;
 import com.hammez.stride.garmin.GarminSamples.Saved;
@@ -21,21 +27,38 @@ import com.hammez.stride.garmin.auth.GarminAuth.WhoAmI;
 import com.hammez.stride.garmin.auth.GarminException;
 
 /**
- * The {@code login}, {@code whoami}, {@code logout} and {@code capture} commands. Runs one command and sets the exit code:
+ * The commands: {@code login}, {@code whoami}, {@code logout}, the data commands ({@code activities},
+ * {@code activity}, {@code summary}, {@code sleep}) and {@code capture}. Runs one command and sets the exit code:
  * 0 for success, 1 for a failure, 2 for a usage error.
+ * <p>
+ * The data commands go through {@link GarminClient}, so the cache answers when it can. After one, a reason the
+ * cache couldn't be used goes to stderr, so it isn't silent; the command still succeeds.
  */
 public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
 
     static final String USAGE = """
-            Usage: java -jar stride-mcp.jar <command>
+            Usage: java -jar stride-mcp.jar <command> [options]
 
             Commands:
               login             Sign in to Garmin in your browser and save the session
               whoami            Show who you're signed in as (refreshes the session if needed)
               logout            Delete the saved session and the cache
+              activities        Your activities from the last 7 days, newest first
+                --days N          The last N days instead, today included (1 to 90)
+                --type T          Only this type, as Garmin names it: running, cycling, trail_running...
+              activity <id>     One activity: totals, heart rate, training effect and laps. The id is in activities.
+              summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery. Default today.
+              sleep [date]      The night that ended on that morning. Default last night.
               capture <folder>  Save Garmin's raw replies (about 10 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
+
+            Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
+            --no-cache            With activities, activity, summary or sleep: ask Garmin even if the cache
+                                  has a fresh copy. The new reply is still cached.
             """;
+
+    private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep");
+    private static final int DEFAULT_DAYS = 7;
 
     static final String CHECKLIST = "the checklist in docs/phases/phase-2-data.md (\"Getting real samples\")";
 
@@ -44,21 +67,26 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
     private final GarminAuth auth;
     private final GarminSamples samples;
     private final GarminCache cache;
+    private final GarminClient client;
     private final CliIo io;
     private final ZoneId zone;
     private int exitCode;
 
-    public StrideCommands(GarminAuth auth, GarminSamples samples, GarminCache cache, CliIo io, ZoneId zone) {
+    /** @param zone the computer's, for the token times {@code login} and {@code whoami} print */
+    public StrideCommands(GarminAuth auth, GarminSamples samples, GarminCache cache, GarminClient client, CliIo io,
+            ZoneId zone) {
         this.auth = auth;
         this.samples = samples;
         this.cache = cache;
+        this.client = client;
         this.io = io;
         this.zone = zone;
     }
 
+    /** Reads the raw arguments, not Spring's split of them: see {@link CommandLine}. */
     @Override
     public void run(ApplicationArguments args) {
-        exitCode = run(args.getNonOptionArgs());
+        exitCode = run(Arrays.asList(args.getSourceArgs()));
     }
 
     @Override
@@ -67,31 +95,27 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
     }
 
     int run(List<String> args) {
-        if (args.isEmpty() || args.size() != (args.getFirst().equals("capture") ? 2 : 1)) {
-            io.err().print(USAGE);
+        CommandLine line;
+        Runnable command;
+        try {
+            line = CommandLine.parse(args);
+            if (line.help()) {
+                io.out().print(USAGE);
+                return 0;
+            }
+            command = command(line);
+        } catch (UsageException e) {
+            if (e.getMessage() != null) {
+                io.err().println(e.getMessage());
+            }
+            if (e.showUsage()) {
+                io.err().print(USAGE);
+            }
             return 2;
         }
-        Path folder = null;
-        if (args.getFirst().equals("capture")) {
-            folder = captureFolder(args.get(1));
-            if (folder == null) {
-                io.err().print(USAGE);
-                return 2;
-            }
-        }
+        boolean data = DATA_COMMANDS.contains(line.command());
         try {
-            switch (args.getFirst()) {
-                case "login" -> login();
-                case "capture" -> capture(folder);
-                case "whoami" -> whoami();
-                case "logout" -> logout();
-                case "help", "--help", "-h" -> io.out().print(USAGE);
-                default -> {
-                    io.err().println("Unknown command: " + args.getFirst());
-                    io.err().print(USAGE);
-                    return 2;
-                }
-            }
+            command.run();
             return 0;
         } catch (GarminException e) {
             io.err().println(e.getMessage());
@@ -99,7 +123,122 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         } catch (UncheckedIOException e) {
             io.err().println(e.getMessage() + ": " + e.getCause().getMessage());
             return 1;
+        } finally {
+            if (data) {
+                cache.problem().ifPresent(io.err()::println);
+            }
         }
+    }
+
+    /**
+     * The command to run, with its arguments checked, so nothing is sent to Garmin for a command line that's wrong.
+     *
+     * @throws UsageException if the command line is wrong
+     */
+    private Runnable command(CommandLine line) {
+        String name = line.command();
+        if (name == null) {
+            throw new UsageException(null, true);
+        }
+        if (line.noCache() && !DATA_COMMANDS.contains(name)) {
+            throw new UsageException("--no-cache only works with activities, activity, summary and sleep.", true);
+        }
+        if ((line.days() != null || line.type() != null) && !name.equals("activities")) {
+            throw new UsageException("--days and --type only work with activities.", true);
+        }
+        GarminClient data = line.noCache() ? client.skippingCache() : client;
+        return switch (name) {
+            case "login" -> {
+                arguments(line, 0, 0);
+                yield this::login;
+            }
+            case "whoami" -> {
+                arguments(line, 0, 0);
+                yield this::whoami;
+            }
+            case "logout" -> {
+                arguments(line, 0, 0);
+                yield this::logout;
+            }
+            case "activities" -> {
+                arguments(line, 0, 0);
+                int days = line.days() == null ? DEFAULT_DAYS : line.days();
+                yield () -> activities(data, days, line.type());
+            }
+            case "activity" -> {
+                arguments(line, 1, 1);
+                long id = activityId(line.arguments().getFirst());
+                yield () -> new DataPrinter(io.out()).activity(data.activity(id));
+            }
+            case "summary" -> {
+                arguments(line, 0, 1);
+                LocalDate date = date(line);
+                yield () -> new DataPrinter(io.out()).summary(data.dailySummary(date == null ? data.today() : date));
+            }
+            case "sleep" -> {
+                arguments(line, 0, 1);
+                LocalDate date = date(line);
+                yield () -> sleep(data, date);
+            }
+            case "capture" -> {
+                arguments(line, 1, 1);
+                Path folder = captureFolder(line.arguments().getFirst());
+                yield () -> capture(folder);
+            }
+            case "help", "-h" -> {
+                arguments(line, 0, 0);
+                yield () -> io.out().print(USAGE);
+            }
+            default -> throw new UsageException("Unknown command: " + name, true);
+        };
+    }
+
+    private static void arguments(CommandLine line, int min, int max) {
+        int count = line.arguments().size();
+        if (count < min || count > max) {
+            throw new UsageException(null, true);
+        }
+    }
+
+    /** A positive whole number. */
+    private static long activityId(String arg) {
+        try {
+            if (arg.chars().allMatch(Character::isDigit)) {
+                long id = Long.parseLong(arg);
+                if (id > 0) {
+                    return id;
+                }
+            }
+        } catch (NumberFormatException e) {
+            // Too long: same message.
+        }
+        throw new UsageException("Activity ids are numbers, like 20123456789.", false);
+    }
+
+    /** The date argument, or null for the default (today). */
+    private static LocalDate date(CommandLine line) {
+        if (line.arguments().isEmpty()) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(line.arguments().getFirst());
+        } catch (DateTimeParseException e) {
+            throw new UsageException("Dates look like 2026-10-22.", false);
+        }
+    }
+
+    /** Today and the {@code days - 1} days before it, in the Garmin profile's time zone. */
+    private void activities(GarminClient data, int days, String type) {
+        LocalDate to = data.today();
+        LocalDate from = to.minusDays(days - 1);
+        List<ActivitySummary> found = data.activities(from, to, type);
+        new DataPrinter(io.out()).activities(found, from, to, type);
+    }
+
+    /** No date means last night: the night that ended this morning. */
+    private void sleep(GarminClient data, LocalDate date) {
+        LocalDate night = date == null ? data.today() : date;
+        new DataPrinter(io.out()).sleep(night, data.sleep(night), data.zone());
     }
 
     private void login() {
@@ -128,20 +267,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         }
     }
 
-    /**
-     * The capture folder, or null (after saying why) if the argument isn't one. Spring already takes
-     * {@code --help} as an option, but {@code -h} would arrive here.
-     */
-    private Path captureFolder(String arg) {
+    /** The capture folder. Spring takes {@code --help} as an option, but {@code -h} would arrive here. */
+    private static Path captureFolder(String arg) {
         if (arg.isBlank() || arg.startsWith("-")) {
-            io.err().println("capture needs a folder, like: stride-mcp capture ~/stride-samples");
-            return null;
+            throw new UsageException("capture needs a folder, like: stride-mcp capture ~/stride-samples", true);
         }
         try {
             return Path.of(arg);
         } catch (InvalidPathException e) {
-            io.err().println("Not a folder path: " + e.getMessage());
-            return null;
+            throw new UsageException("Not a folder path: " + e.getMessage(), true);
         }
     }
 

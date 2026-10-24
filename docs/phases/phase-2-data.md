@@ -4,7 +4,7 @@
 
 **Done when:** `stride-mcp activities --days 7 --type running` prints last week's runs.
 
-_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`) and 5 (`GarminCache`) built and tested. Real samples captured 23 October 2026. Next: step 6, the CLI commands._
+_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`), 5 (`GarminCache`) and 6 (the CLI commands) built and tested. Real samples captured 23 October 2026. Next: step 7, the docs, then the owner's live check (step 8)._
 
 ## The commands
 
@@ -24,17 +24,87 @@ Same jar and same style as phase 1. These are for testing. In phase 3 the same c
 | `--stride.token-file=…` | As in phase 1 |
 | `--stride.cache-dir=…` | Keep the cache somewhere else (default `~/.stride-mcp/cache`) |
 
-Example output (made up):
+The commands print metric units: km with 2 decimals, `h:mm:ss` or `m:ss`, pace as `min:ss /km`. The records underneath always use metres and seconds. A value Garmin left out is `–` in a table and left out of a list, never `null`. Garmin sends `0` for the distance, speed and moving time of activities without them (strength training, indoor cycling), so for activities a `0` there is `–` too.
+
+### What they print (built 24 October 2026)
+
+From the fixtures in `src/test/resources/garmin/` (real replies, stripped). Columns are as wide as their widest value, two spaces apart.
 
 ```
 $ stride-mcp activities --days 7 --type running
-Date        Type           Name             Distance  Time     Pace      Avg HR  Id
-Wed 22 Oct  running        Morning Run       8.02 km  42:10    5:15 /km  148     20123456789
-Sun 19 Oct  trail_running  Long hill run    15.40 km  1:31:05  5:55 /km  141     20098765432
-2 activities.
+Date        Type     Name               Distance  Time   Pace      Avg HR  Id
+Thu 22 Oct  running  Islington Running   5.05 km  36:01  7:08 /km  143     24810777073
+Sun 18 Oct  running  Islington Running   8.01 km  53:51  6:43 /km  149     24765567036
+2 running activities in the last 7 days (Sat 17 Oct to Fri 23 Oct).
 ```
 
-The commands print metric units. The records underneath always use metres and seconds.
+The last line shows the date range, so you can see which "today" was used.
+
+```
+$ stride-mcp activity 24816092240
+Stair Stepper
+Start            Thu 22 Oct 2026, 17:04
+Type             stair_climbing
+Id               24816092240
+Time             10:02
+Heart rate       avg 142, max 158 bpm
+Calories         133 kcal
+Training effect  2.0 aerobic, 0.0 anaerobic
+Training load    22
+
+Lap  Distance  Time   Pace  Avg HR  Max HR  Elevation
+1           –  10:02  –     142     158     –
+```
+
+A run also shows `Distance`, `Time 36:01 (moving 35:51)`, `Pace 7:08 /km, fastest 4:30 /km`, `Elevation gain`, `Cadence … steps/min` and `Power … W`, and its laps fill in distance and pace. The start is the time on the clock where the activity happened.
+
+```
+$ stride-mcp summary 2026-10-23
+Fri 23 Oct 2026
+Steps            3,532 (goal 11,190)
+Distance         3.18 km
+Calories         1,417 kcal (222 active)
+Heart rate       resting 45, min 43, max 130 bpm
+Stress           average 20 (0–100)
+Body Battery     lowest 30, highest 96
+Intensity        0 min moderate, 2 min vigorous
+Floors climbed   7
+```
+
+A day with no data at all prints `No data recorded for Sat 24 Oct 2026.` Floors are rounded down, because Garmin counts part floors.
+
+```
+$ stride-mcp sleep 2026-10-23
+Night ending Fri 23 Oct 2026
+Start            Thu 22 Oct, 22:37
+End              Fri 23 Oct, 07:37
+Asleep           8:52:00
+  Deep           1:31:00
+  Light          4:55:00
+  REM            2:26:00
+Awake            0:08:00
+Score            91 (Excellent)
+Respiration      12 breaths/min
+SpO2             97% average
+```
+
+Sleep durations are always `h:mm:ss`, so 8 minutes awake (`0:08:00`) can't be read as 8 hours. Start and end are in the Garmin profile's time zone.
+
+If the cache can't be used (see [How it works](#how-it-works-built-23-october-2026)), a data command prints why as one line on stderr, then still answers by asking Garmin.
+
+### How options are read (decided 24 October 2026)
+
+Spring Boot reads `--name=value` as one option, but splits `--days 7` into an option with no value and a separate `7`, and it doesn't keep the order needed to pair them up again. So stride-mcp reads the raw command line itself:
+
+| Rule | Why |
+|---|---|
+| `--days 7` and `--days=7` both work, and so do `--type running` and `--type=running` | The plan shows the space form. The `=` form is what Spring users expect. |
+| Options can go anywhere: `stride-mcp --no-cache sleep` works | No reason to be strict |
+| An option with a dot in its name (`--stride.token-file=…`, `--logging.level.root=…`) is skipped | It's a Spring setting, and Spring has already read it |
+| Any other unknown option is an error (exit 2) | A typo like `--day 7` shouldn't be silently ignored |
+| An option on a command that doesn't use it (`whoami --no-cache`, `summary --days 3`) is an error | Same |
+| An option given twice is an error | Which one was meant? |
+| `--help` anywhere prints the usage | Spring used to swallow it as an option |
 
 ## Where each kind of data comes from
 
@@ -248,8 +318,9 @@ Garmin's daily endpoints take a plain local date (`2026-10-22`), and Garmin deci
 | Word | Means |
 |---|---|
 | **Today** | Today's date in my Garmin profile's time zone. If that can't be read, the computer's time zone. |
-| **Last N days** | Today and the N−1 days before it. `--days 7` on Thu 23 Oct = Fri 17 Oct to Thu 23 Oct. Not "last calendar week". |
+| **Last N days** | Today and the N−1 days before it. `--days 7` on Fri 23 Oct = Sat 17 Oct to Fri 23 Oct. Not "last calendar week". |
 | **Sleep for a date** | The night that ended on that morning. `sleep 2026-10-23` = the night of 22–23 October. So `sleep` with no date = last night. |
+| **Times shown** | Sleep start and end: in the Garmin profile's time zone. An activity's start: the time on the clock where it happened. |
 | **An activity's time** | `startLocal` is the time on the clock where I did it (from Garmin's `startTimeLocal`). `start` is the exact moment (from `startTimeGMT`). |
 
 The `activities` search filters by start date, in the time zone where each activity happened. _To confirm with real samples._
@@ -386,18 +457,23 @@ I then turn them into fixtures under `src/test/resources/garmin/`, plus made-up 
 | `activity` id doesn't exist | "No activity with id 123. Check the id in `stride-mcp activities`." |
 | `activity` id isn't a number | "Activity ids are numbers, like 20123456789." (exit code 2) |
 | Bad date | "Dates look like 2026-10-22." (exit code 2) |
-| `--days` out of range | "--days must be between 1 and 90." (exit code 2) |
+| `--days` out of range, not a number, or missing | "--days must be between 1 and 90." (exit code 2) |
+| `--type` with no value | "--type needs an activity type, like --type running." (exit code 2) |
+| Missing or extra argument, unknown option | The usage, after a line saying what's wrong (exit code 2) |
 | Too many activities in the range | "More than 200 activities from 2026-07-01 to 2026-10-23. Try a shorter range." |
 | Daily summary has `privacyProtected` | "Garmin wouldn't share the summary for 2026-10-23. Run `stride-mcp login` again." |
 | A reply isn't the shape we expect | "Garmin's reply for … wasn't what stride-mcp expected. Garmin may have changed it. Check for an update." |
-| No sleep that night | Not an error: "No sleep recorded for the night ending Thu 23 Oct." |
-| No activities in the range | Not an error: "No activities in the last 7 days." |
+| No sleep that night | Not an error: "No sleep recorded for the night ending Fri 23 Oct." |
+| No activities in the range | Not an error: "No activities in the last 7 days (Sat 17 Oct to Fri 23 Oct)." With `--type running`: "No running activities…" |
+
+Usage errors are exit code 2 and send nothing to Garmin. Garmin errors (404, 429, not logged in…) are exit code 1.
 
 ## Code layout
 
 ```
 com.hammez.stride
 ├── cli/              + activities, activity, summary, sleep, capture
+│                       CommandLine (options), DataPrinter (output)
 ├── garmin/
 │   ├── GarminClient       the four calls, cache first, then GarminApi
 │   ├── GarminDataConfig   paths, params, page size, cache times
@@ -428,7 +504,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 | Sleep | Normal, no sleep (empty `dailySleepDTO`), 204 |
 | Dates | Profile time zone used for "today", fallback to computer's zone, `--days 7` range |
 | Cache | Fresh hit makes no request (also from a new client), stale entry refetched, skipping the cache, broken file ignored, file permissions, symlinked folder, `logout` clears it, errors not cached, each lifetime either side of its boundary (today, yesterday, older; empty older day 1 hour) |
-| CLI | Output for each command, bad id, bad date, bad `--days` |
+| CLI | Output for each command from the fixtures, `--type` sent, `--days` range from the profile's "today", default dates, `--no-cache`, a second run answered from the cache, `cache.problem()` on stderr, bad id, bad date, bad `--days`, missing or extra arguments, unknown options, 404 and 429 are exit 1, no token in any output |
 
 ## Steps
 
@@ -437,7 +513,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 3. ✅ **`capture` command.** Built and tested 23 October 2026. Next: the owner runs it and sends stripped samples.
 4. ✅ **Records and `GarminClient`**, parsed against fixtures made from the samples. Built and tested 23 October 2026.
 5. ✅ **`GarminCache`**. Tests. The private-file code is now shared in `com.hammez.stride.files` (decided and built 23 October 2026). See [How it works](#how-it-works-built-23-october-2026).
-6. **CLI commands** `activities`, `activity`, `summary`, `sleep`. Tests. Print `GarminCache.problem()` to stderr after a data command, so a cache that can't be used isn't silent.
+6. ✅ **CLI commands** `activities`, `activity`, `summary`, `sleep`, with `--no-cache`. Tests. `GarminCache.problem()` goes to stderr after a data command, so a cache that can't be used isn't silent. Built and tested 24 October 2026. See [What they print](#what-they-print-built-24-october-2026) and [How options are read](#how-options-are-read-decided-24-october-2026).
 7. **Docs:** quick start, this doc, AGENTS.md status.
 8. **Live check** (owner): run each command, then run them again and see the cache answer.
 

@@ -4,10 +4,6 @@ import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.catchThrowable;
 
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.UncheckedIOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -324,6 +320,7 @@ class GarminClientTest {
                 .respond(PERSONAL, 200, fixture("personal-information.json"));
 
         assertThat(client.today()).isEqualTo(LocalDate.of(2026, 10, 24));
+        assertThat(client.zone()).isEqualTo(ZoneId.of("Europe/London"));
     }
 
     @Test
@@ -392,13 +389,6 @@ class GarminClientTest {
     }
 
     private static String fixture(String name) {
-        try (InputStream in = GarminClientTest.class.getResourceAsStream("/garmin/" + name)) {
-            if (in == null) {
-                throw new IllegalArgumentException("No fixture " + name);
-            }
-            return new String(in.readAllBytes(), StandardCharsets.UTF_8);
-        } catch (IOException e) {
-            throw new UncheckedIOException(e);
-        }
+        return Fixtures.read(name);
     }
 }

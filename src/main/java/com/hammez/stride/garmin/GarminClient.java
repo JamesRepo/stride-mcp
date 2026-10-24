@@ -235,6 +235,11 @@ public class GarminClient {
         return today(me());
     }
 
+    /** My Garmin profile's time zone, or the computer's if the profile has none. For showing times, such as sleep. */
+    public ZoneId zone() {
+        return me().zone();
+    }
+
     private LocalDate today(Me me) {
         return LocalDate.now(clock.withZone(me.zone()));
     }

@@ -57,7 +57,7 @@ class StrideCommandsTest {
                 new ProfileClient(api, config, JsonMapper.builder().build()), store);
         var samples = new GarminSamples(api, GarminDataConfig.defaults(config), json, Clock.systemUTC(), ZoneOffset.UTC);
         cache = new GarminCache(temp.resolve("cache"), json, Clock.systemUTC());
-        commands = new StrideCommands(auth, samples, cache, io(), ZoneOffset.UTC);
+        commands = new StrideCommands(auth, samples, cache, null, io(), ZoneOffset.UTC);
     }
 
     private CliIo io() {
@@ -127,7 +127,7 @@ class StrideCommandsTest {
             Clock clock = Clock.fixed(Instant.parse("2026-10-23T12:00:00Z"), ZoneOffset.UTC);
             var samples = new GarminSamples(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
                     GarminDataConfig.defaults(garmin.config()), json, clock, ZoneOffset.UTC);
-            var capture = new StrideCommands(null, samples, null, io(), ZoneOffset.UTC);
+            var capture = new StrideCommands(null, samples, null, null, io(), ZoneOffset.UTC);
 
             assertThat(capture.run(List.of("capture", folder.toString()))).isZero();
         }
