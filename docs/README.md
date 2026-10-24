@@ -4,13 +4,13 @@
 
 | Doc | Read it for |
 |---|---|
-| [Quick start](quick-start.md) | Build it, log in, check it works |
+| [Quick start](quick-start.md) | Build it, log in, read your data on the command line |
 | [Concepts](concepts.md) | What MCP is, and the other words we'll use |
 | [Getting Garmin data](garmin-access.md) | The ways in, and their risks |
 | [Project plan](project-plan.md) | What we're building, in what order |
 | [Running it](running.md) | Where it runs, and how an AI app connects to it |
 | [Phase 1: Login](phases/phase-1-login.md) | Detailed plan for the command-line login |
-| [Phase 2: Data](phases/phase-2-data.md) | Detailed plan for fetching activities, daily summary and sleep |
+| [Phase 2: Data](phases/phase-2-data.md) | Detailed plan for fetching activities, daily summary and sleep, and the cache |
 
 ## The short version
 

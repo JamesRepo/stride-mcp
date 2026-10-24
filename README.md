@@ -2,7 +2,7 @@
 
 Let AI apps read my Garmin data, using [MCP](https://modelcontextprotocol.io). Works with any MCP client, such as Claude or ChatGPT.
 
-> **Status:** early. Phase 1 (command-line login) is built and being tested for real. It can log in, but can't fetch data yet. See [the plan](docs/project-plan.md).
+> **Status (October 2026):** early. Phase 1 (command-line login) is done. Phase 2's data commands (activities, one activity, daily summary, sleep) are built and waiting for the owner's live check. It can't talk to an AI app yet. See [the plan](docs/project-plan.md).
 
 ## How it works
 
@@ -24,7 +24,7 @@ Needs Java 25.
 
 ## Try it
 
-[Quick start](docs/quick-start.md): build, log in to Garmin, check it works.
+[Quick start](docs/quick-start.md): build, log in to Garmin, read your data.
 
 ## Docs
 

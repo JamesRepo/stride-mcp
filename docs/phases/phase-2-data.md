@@ -4,7 +4,7 @@
 
 **Done when:** `stride-mcp activities --days 7 --type running` prints last week's runs.
 
-_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`), 5 (`GarminCache`) and 6 (the CLI commands) built and tested. Real samples captured 23 October 2026. Next: step 7, the docs, then the owner's live check (step 8)._
+_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`), 5 (`GarminCache`) and 6 (the CLI commands) built and tested. Real samples captured 23 October 2026. Step 7 (docs) done 24 October 2026. Next: the owner's live check (step 8)._
 
 ## The commands
 
@@ -514,7 +514,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 4. ✅ **Records and `GarminClient`**, parsed against fixtures made from the samples. Built and tested 23 October 2026.
 5. ✅ **`GarminCache`**. Tests. The private-file code is now shared in `com.hammez.stride.files` (decided and built 23 October 2026). See [How it works](#how-it-works-built-23-october-2026).
 6. ✅ **CLI commands** `activities`, `activity`, `summary`, `sleep`, with `--no-cache`. Tests. `GarminCache.problem()` goes to stderr after a data command, so a cache that can't be used isn't silent. Built and tested 24 October 2026. See [What they print](#what-they-print-built-24-october-2026) and [How options are read](#how-options-are-read-decided-24-october-2026).
-7. **Docs:** quick start, this doc, AGENTS.md status.
+7. ✅ **Docs:** quick start, this doc, AGENTS.md status. Done 24 October 2026. See [Quick start](../quick-start.md#4-read-your-data).
 8. **Live check** (owner): run each command, then run them again and see the cache answer.
 
 ## Not in phase 2
