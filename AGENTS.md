@@ -14,7 +14,7 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 ## Current status
 
 - **Phase 1 (command-line login):** built and tested. The owner ran `login` and `whoami` live on 23 October 2026 and both worked. Still to confirm: `whoami` still works days later. Plan: `docs/phases/phase-1-login.md`.
-- **Phase 2 (fetch real data):** plan approved. Steps 2 (`GarminApi`), 3 (`capture`) and 4 (records and `GarminClient`) built and tested. Fixtures from real replies (23 October 2026) are in `src/test/resources/garmin/`. Next: step 5, `GarminCache`. Plan: `docs/phases/phase-2-data.md`.
+- **Phase 2 (fetch real data):** plan approved. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`) and 5 (`GarminCache`, shared `files.PrivateFolder`) built and tested. Fixtures from real replies (23 October 2026) are in `src/test/resources/garmin/`. Next: step 6, the CLI commands `activities`, `activity`, `summary`, `sleep` with `--no-cache`. Plan: `docs/phases/phase-2-data.md`.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 
@@ -42,7 +42,8 @@ Run `./mvnw verify` before saying a change is done.
 src/main/java/com/hammez/stride/
 ├── cli/            login / whoami / logout commands      (phase 1)
 ├── garmin/auth/    Garmin login, token store, refresh    (phase 1)
-├── garmin/         Garmin data client                    (phase 2)
+├── garmin/         Garmin data client and cache          (phase 2)
+├── files/          private folders: 700/600, atomic writes (shared by all layers)
 └── mcp/            MCP tools                             (phase 3)
 docs/               plain-language project docs
 spike/              throwaway experiments, not built
@@ -61,7 +62,7 @@ Keep the layers separate: **MCP tools → Garmin client → auth.** Tools never 
 ### Never leak secrets
 - Never print, log, or include in exception messages: service tickets (`ST-…`), access tokens or refresh tokens. Error bodies from Garmin are fine to show if they contain none of these.
 - stride-mcp never handles the Garmin password. Don't add any code that asks for it or stores it.
-- The token file (`~/.stride-mcp/garmin_tokens.json`) must stay `600` inside a `700` folder, and be written atomically (temp file, then move).
+- The token file (`~/.stride-mcp/garmin_tokens.json`) and the cache (`~/.stride-mcp/cache/`) must stay `600` inside a `700` folder, and be written atomically (temp file, then move). Use `files.PrivateFolder` for this; don't write another copy.
 - Never commit tokens, `.env` files, or `application-local.*` (already gitignored).
 
 ### Be gentle with Garmin

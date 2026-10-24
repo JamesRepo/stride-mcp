@@ -32,7 +32,10 @@ import com.hammez.stride.garmin.auth.RateLimitedException;
 
 import tools.jackson.databind.json.JsonMapper;
 
-/** The data calls, parsed from real (stripped) Garmin replies in src/test/resources/garmin, plus made-up variants. */
+/**
+ * The data calls, parsed from real (stripped) Garmin replies in src/test/resources/garmin, plus made-up variants.
+ * The client skips the cache here, so asking twice asks Garmin twice: {@link GarminClientCacheTest} tests the cache.
+ */
 class GarminClientTest {
 
     /** 00:30 on Sat 24 October in London (still summer time), but 23:30 on the 23rd in UTC. */
@@ -52,6 +55,7 @@ class GarminClientTest {
 
     private final FakeGarmin garmin = new FakeGarmin();
     private GarminClient client;
+    private int clients;
 
     @BeforeEach
     void setUp() {
@@ -67,6 +71,7 @@ class GarminClientTest {
 
     @Test
     void activitiesFromARealList() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, fixture("activities.json"));
 
         var activities = client.activities(LocalDate.of(2026, 10, 17), OCT_23, null);
@@ -85,6 +90,7 @@ class GarminClientTest {
 
     @Test
     void activitiesSendsTheRangeAndTheFirstPage() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, "[]");
 
         assertThat(client.activities(LocalDate.of(2026, 10, 17), OCT_23, null)).isEmpty();
@@ -95,6 +101,7 @@ class GarminClientTest {
 
     @Test
     void activitiesSendsTheTypeFilter() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, "[]");
 
         client.activities(OCT_23, OCT_23, "running");
@@ -104,6 +111,7 @@ class GarminClientTest {
 
     @Test
     void activitiesWithNoContentIsAnEmptyList() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 204, "");
 
         assertThat(client.activities(OCT_23, OCT_23, null)).isEmpty();
@@ -111,6 +119,7 @@ class GarminClientTest {
 
     @Test
     void activitiesMissingFieldsBecomeNull() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, "[{\"activityId\":5,\"averageHR\":\"fast\"}]");
 
         assertThat(client.activities(OCT_23, OCT_23, null)).containsExactly(new ActivitySummary(5, null, null,
@@ -119,6 +128,7 @@ class GarminClientTest {
 
     @Test
     void activitiesPagesUntilAPageIsNotFull() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, Map.of("startDate", "2026-10-23", "endDate", "2026-10-23", "start", "0",
                         "limit", "20"), 200, page(1, 20))
                 .respond(ACTIVITIES, Map.of("startDate", "2026-10-23", "endDate", "2026-10-23", "start", "20",
@@ -131,6 +141,7 @@ class GarminClientTest {
 
     @Test
     void activitiesStopsAtThePageLimit() {
+        signedInAs("{}");
         for (int i = 0; i < 11; i++) {
             garmin.respond(ACTIVITIES, 200, page(i * 20 + 1, 20));
         }
@@ -143,6 +154,7 @@ class GarminClientTest {
 
     @Test
     void activitiesThatArentAListAreAnUnexpectedReply() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, "{\"activities\":[]}")
                 .respond(ACTIVITIES, 200, "[{\"activityName\":\"No id\"}]")
                 .respond(ACTIVITIES, 200, "<html>Maintenance</html>")
@@ -327,7 +339,7 @@ class GarminClientTest {
     }
 
     @Test
-    void theProfileIsFetchedOnceAndTheDisplayNameIsEncoded() {
+    void theProfileIsFetchedOnceEvenWhenSkippingTheCacheAndTheDisplayNameIsEncoded() {
         signedInAs("{}");
         garmin.respond(SUMMARY, 200, "{}").respond(SUMMARY, 200, "{}").respond(SLEEP, 204, "");
 
@@ -352,17 +364,21 @@ class GarminClientTest {
 
     @Test
     void garminErrorsPassThrough() {
+        signedInAs("{}");
         garmin.respond(ACTIVITIES, 429, "");
 
         assertThat(catchThrowable(() -> client.activities(OCT_23, OCT_23, null)))
                 .isInstanceOf(RateLimitedException.class);
-        assertThat(garmin.requests()).hasSize(1);
+        assertThat(garmin.requests(ACTIVITIES)).hasSize(1);
     }
 
+    /** A client skipping the cache, with a cache folder of its own, so no profile is carried over. */
     private GarminClient client(ZoneId fallbackZone) {
         Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+        JsonMapper json = JsonMapper.builder().build();
         return new GarminClient(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
-                GarminDataConfig.defaults(garmin.config()), JsonMapper.builder().build(), clock, fallbackZone);
+                new GarminCache(temp.resolve("cache-" + ++clients), json, clock),
+                GarminDataConfig.defaults(garmin.config()), json, clock, fallbackZone).skippingCache();
     }
 
     private void signedInAs(String personalInformation) {

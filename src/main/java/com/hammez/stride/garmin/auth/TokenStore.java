@@ -2,24 +2,22 @@ package com.hammez.stride.garmin.auth;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
-import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.AtomicMoveNotSupportedException;
-import java.nio.file.FileSystemException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
-import java.nio.file.attribute.PosixFileAttributeView;
-import java.nio.file.attribute.PosixFilePermission;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 import java.time.format.DateTimeParseException;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Supplier;
+
+import com.hammez.stride.files.PrivateFolder;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -34,21 +32,21 @@ import tools.jackson.databind.node.ObjectNode;
  *   <li>Never follows symlinks for the folder or the file.</li>
  *   <li>{@link #underLock} lets one stride-mcp process at a time load, refresh and save.</li>
  * </ul>
- * This is the only class that knows how tokens are stored.
+ * The file handling is shared with the cache, in {@link PrivateFolder}. This is the only class that knows how
+ * tokens are stored.
  */
 public class TokenStore {
 
-    private static final Set<PosixFilePermission> DIR_PERMISSIONS = PosixFilePermissions.fromString("rwx------");
-    private static final Set<PosixFilePermission> FILE_PERMISSIONS = PosixFilePermissions.fromString("rw-------");
-
     private final Path file;
     private final Path dir;
+    private final PrivateFolder folder;
     private final Path lockFile;
     private final JsonMapper json;
 
     public TokenStore(Path file, JsonMapper json) {
         this.file = file.toAbsolutePath().normalize();
         this.dir = this.file.getParent();
+        this.folder = new PrivateFolder(dir);
         this.lockFile = this.file.resolveSibling(this.file.getFileName() + ".lock");
         this.json = json;
     }
@@ -68,8 +66,8 @@ public class TokenStore {
                 throw new GarminException("Token file " + file + " is a link or not a regular file. "
                         + "Run `stride-mcp logout`, then `stride-mcp login`.");
             }
-            setPermissions(dir, DIR_PERMISSIONS);
-            setPermissions(file, FILE_PERMISSIONS);
+            PrivateFolder.setPermissions(dir, PrivateFolder.FOLDER_PERMISSIONS);
+            PrivateFolder.setPermissions(file, PrivateFolder.FILE_PERMISSIONS);
             return Optional.of(fromJson(Files.readAllBytes(file)));
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
@@ -80,32 +78,15 @@ public class TokenStore {
 
     public void save(GarminTokens tokens) {
         byte[] content = toJson(tokens);
-        Path temp = null;
         try {
             createDirectory();
-            temp = Files.createTempFile(dir, ".garmin_tokens", ".tmp",
-                    PosixFilePermissions.asFileAttribute(FILE_PERMISSIONS));
-            setPermissions(temp, FILE_PERMISSIONS);
-            try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) {
-                channel.write(ByteBuffer.wrap(content));
-                channel.force(true);
-            }
-            Files.move(temp, file, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-            temp = null;
+            folder.write(file.getFileName().toString(), content);
         } catch (AtomicMoveNotSupportedException e) {
             throw new GarminException("Can't save tokens safely: " + dir + " doesn't support atomic moves.", e);
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
             throw new UncheckedIOException("Couldn't save the token file " + file, e);
-        } finally {
-            if (temp != null) {
-                try {
-                    Files.deleteIfExists(temp);
-                } catch (IOException ignored) {
-                    // Best effort. The temp file is 600 and holds nothing the real file wouldn't.
-                }
-            }
         }
     }
 
@@ -120,7 +101,7 @@ public class TokenStore {
             createDirectory();
             channel = FileChannel.open(lockFile,
                     Set.of(StandardOpenOption.CREATE, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS),
-                    PosixFilePermissions.asFileAttribute(FILE_PERMISSIONS));
+                    PosixFilePermissions.asFileAttribute(PrivateFolder.FILE_PERMISSIONS));
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
@@ -152,40 +133,29 @@ public class TokenStore {
     }
 
     private void createDirectory() throws IOException {
-        if (Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
-            requireRealDirectory();
-        } else {
-            Files.createDirectories(dir, PosixFilePermissions.asFileAttribute(DIR_PERMISSIONS));
+        try {
+            folder.create();
+        } catch (NotDirectoryException e) {
+            throw linkedFolder();
         }
-        // Set explicitly: the umask may have loosened the permissions given at creation.
-        setPermissions(dir, DIR_PERMISSIONS);
     }
 
     private void requireRealDirectory() {
-        if (!Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS)) {
-            throw new GarminException("Token folder " + dir + " is a link or not a folder. "
-                    + "Remove it, then run `stride-mcp login`.");
+        try {
+            folder.requireRealFolder();
+        } catch (NotDirectoryException e) {
+            throw linkedFolder();
         }
+    }
+
+    private GarminException linkedFolder() {
+        return new GarminException("Token folder " + dir + " is a link or not a folder. "
+                + "Remove it, then run `stride-mcp login`.");
     }
 
     private GarminException noUnixPermissions(UnsupportedOperationException e) {
         return new GarminException("Can't keep tokens private: " + dir + " doesn't support Unix file permissions. "
                 + "Use a folder on your main disk (see --stride.token-file).", e);
-    }
-
-    private static void setPermissions(Path path, Set<PosixFilePermission> permissions) throws IOException {
-        PosixFileAttributeView view = Files.getFileAttributeView(path, PosixFileAttributeView.class,
-                LinkOption.NOFOLLOW_LINKS);
-        if (view == null) {
-            throw new UnsupportedOperationException("No POSIX permissions for " + path);
-        }
-        try {
-            if (!view.readAttributes().permissions().equals(permissions)) {
-                view.setPermissions(permissions);
-            }
-        } catch (FileSystemException e) {
-            throw new IOException("Couldn't set permissions on " + path, e);
-        }
     }
 
     private byte[] toJson(GarminTokens tokens) {

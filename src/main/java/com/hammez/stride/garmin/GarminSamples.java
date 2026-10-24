@@ -1,6 +1,11 @@
 package com.hammez.stride.garmin;
 
+import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.LocalDate;
@@ -10,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
+import com.hammez.stride.files.PrivateFolder;
 import com.hammez.stride.garmin.auth.GarminApi;
 import com.hammez.stride.garmin.auth.GarminException;
 import com.hammez.stride.garmin.auth.NotFoundException;
@@ -81,9 +87,9 @@ public class GarminSamples {
      */
     public Capture capture(Path folder) {
         var out = new PrivateFolder(folder);
-        out.check();
+        check(out);
         for (String file : FILES) {
-            if (out.contains(file)) {
+            if (Files.exists(out.file(file), LinkOption.NOFOLLOW_LINKS)) {
                 throw new GarminException(out.dir() + " already holds samples from an earlier run (" + file + "). "
                         + "Delete them or pick a new folder.");
             }
@@ -95,6 +101,53 @@ public class GarminSamples {
             throw run.stopped(e);
         }
         return new Capture(out.dir(), List.copyOf(run.saved), List.copyOf(run.notes));
+    }
+
+    /**
+     * Checks the folder can be used, without creating anything. A missing folder is fine. An existing one must be
+     * a real folder that is already {@code 700}: capture never changes the permissions of a folder you already had.
+     */
+    private static void check(PrivateFolder out) {
+        if (!out.exists()) {
+            return;
+        }
+        try {
+            if (!out.isPrivate()) {
+                throw new GarminException("Folder " + out.dir() + " already exists and isn't private (700). "
+                        + "Pick a new folder and stride-mcp will create it.");
+            }
+        } catch (NotDirectoryException e) {
+            throw new GarminException("Folder " + out.dir() + " is a link or not a folder. Pick a new folder.");
+        } catch (UnsupportedOperationException e) {
+            throw noUnixPermissions(out, e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Couldn't read the permissions of " + out.dir(), e);
+        }
+    }
+
+    /**
+     * Writes a {@code 600} file atomically. The folder is only created by the first write, as {@code 700}, so a run
+     * that fails early leaves nothing.
+     */
+    private static void write(PrivateFolder out, String name, byte[] content) {
+        check(out);
+        try {
+            if (!out.exists()) {
+                out.create();
+            }
+            out.write(name, content);
+        } catch (AtomicMoveNotSupportedException e) {
+            throw new GarminException("Can't save files safely: " + out.dir() + " doesn't support atomic moves.", e);
+        } catch (UnsupportedOperationException e) {
+            throw noUnixPermissions(out, e);
+        } catch (IOException e) {
+            throw new UncheckedIOException("Couldn't save " + out.file(name), e);
+        }
+    }
+
+    private static GarminException noUnixPermissions(PrivateFolder out, UnsupportedOperationException e) {
+        return new GarminException("Can't keep files private: " + out.dir()
+                + " doesn't support Unix file permissions. Use a folder on your main disk.", e);
     }
 
     /** One capture run: the calls in order, and what has been saved so far. */
@@ -212,7 +265,7 @@ public class GarminSamples {
                 content.put("status", 404);
                 content.put("message", e.getMessage());
             }
-            out.write(file, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(content));
+            write(out, file, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(content));
             saved.add(new Saved(file, content.path("status").asInt()));
             current = null;
             return reply;

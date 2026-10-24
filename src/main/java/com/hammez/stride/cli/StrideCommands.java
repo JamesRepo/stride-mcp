@@ -12,6 +12,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ExitCodeGenerator;
 
+import com.hammez.stride.garmin.GarminCache;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.GarminSamples.Capture;
 import com.hammez.stride.garmin.GarminSamples.Saved;
@@ -31,7 +32,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             Commands:
               login             Sign in to Garmin in your browser and save the session
               whoami            Show who you're signed in as (refreshes the session if needed)
-              logout            Delete the saved session
+              logout            Delete the saved session and the cache
               capture <folder>  Save Garmin's raw replies (about 10 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
             """;
@@ -42,13 +43,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
 
     private final GarminAuth auth;
     private final GarminSamples samples;
+    private final GarminCache cache;
     private final CliIo io;
     private final ZoneId zone;
     private int exitCode;
 
-    public StrideCommands(GarminAuth auth, GarminSamples samples, CliIo io, ZoneId zone) {
+    public StrideCommands(GarminAuth auth, GarminSamples samples, GarminCache cache, CliIo io, ZoneId zone) {
         this.auth = auth;
         this.samples = samples;
+        this.cache = cache;
         this.io = io;
         this.zone = zone;
     }
@@ -113,8 +116,16 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         printSession(me);
     }
 
+    /**
+     * Deletes the cache, then the tokens: logging out should leave no personal data behind. The cache goes first so
+     * that a token file that can't be deleted doesn't keep the data too.
+     */
     private void logout() {
+        boolean hadCache = cache.clear();
         io.out().println(auth.logout() ? "Logged out. Deleted " + auth.tokenFile() : "Already logged out.");
+        if (hadCache) {
+            io.out().println("Deleted the cache in " + cache.dir());
+        }
     }
 
     /**

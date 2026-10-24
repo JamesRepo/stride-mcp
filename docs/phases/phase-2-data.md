@@ -4,7 +4,7 @@
 
 **Done when:** `stride-mcp activities --days 7 --type running` prints last week's runs.
 
-_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`) and 4 (records and `GarminClient`) built and tested. Real samples captured 23 October 2026. Next: step 5, `GarminCache`._
+_Status: plan approved 23 October 2026. Steps 2 (`GarminApi`), 3 (`capture`), 4 (records and `GarminClient`) and 5 (`GarminCache`) built and tested. Real samples captured 23 October 2026. Next: step 6, the CLI commands._
 
 ## The commands
 
@@ -22,6 +22,7 @@ Same jar and same style as phase 1. These are for testing. In phase 3 the same c
 |---|---|
 | `--no-cache` | Ask Garmin even if the cache has a fresh copy (the new reply is still cached) |
 | `--stride.token-file=…` | As in phase 1 |
+| `--stride.cache-dir=…` | Keep the cache somewhere else (default `~/.stride-mcp/cache`) |
 
 Example output (made up):
 
@@ -83,7 +84,7 @@ A new record, `GarminDataConfig`, in `com.hammez.stride.garmin`, beside the data
 
 The Garmin address itself (`https://connectapi.garmin.com`) and the headers stay in `GarminAuthConfig`, because auth is what sends the requests. The `socialProfile` path is shared with the login's profile check, so `GarminDataConfig` takes it from `GarminAuthConfig`.
 
-Paths are templates (`/activity-service/activity/{activityId}`). `GarminDataConfig.fill(…)` puts the id or display name in, encoded with `GarminApi.segment(…)`. Step 3 added the paths and query names `capture` needs. The page limit and cache lifetimes come with steps 4 and 5.
+Paths are templates (`/activity-service/activity/{activityId}`). `GarminDataConfig.fill(…)` puts the id or display name in, encoded with `GarminApi.segment(…)`. Step 3 added the paths and query names `capture` needs, step 4 the page limit, and step 5 the cache lifetimes (`GarminDataConfig.CacheLifetimes`).
 
 ```mermaid
 flowchart LR
@@ -161,7 +162,7 @@ No other retries, and never two refreshes for one request. Error text goes throu
 
 Java records in `com.hammez.stride.garmin`. Only the useful fields, named for a reader, with the unit in the name. A field Garmin leaves out becomes `null`, never `0`. (Garmin itself sends `0.0` for the distance of a strength session, and that's kept.)
 
-`GarminReplies` does the parsing. The overall shape is strict: a reply that isn't an object or list, or an activity with no id, is an `UnexpectedReplyException`. Single fields are lenient: missing, null or the wrong type becomes `null`. A 0–100 value outside that range (Garmin uses negatives for "no data") becomes `null`. `displayName` and the time zone are fetched once per `GarminClient` until the cache exists.
+`GarminReplies` does the parsing. The overall shape is strict: a reply that isn't an object or list, or an activity with no id, is an `UnexpectedReplyException`. Single fields are lenient: missing, null or the wrong type becomes `null`. A 0–100 value outside that range (Garmin uses negatives for "no data") becomes `null`. `displayName` and the time zone come from the cache, like everything else.
 
 ```java
 record ActivitySummary(
@@ -292,6 +293,30 @@ flowchart LR
 
 The class is `GarminCache` in `com.hammez.stride.garmin`. It never sees tokens: only replies.
 
+### How it works (built 23 October 2026)
+
+| Detail | Choice |
+|---|---|
+| File names | `social-profile.json`, `personal-information.json`, `activity-<id>.json` and `activity-<id>-splits.json`, `summary-<date>.json`, `sleep-<date>.json`, `activities-<from>-to-<to>[-<type>]-page-<n>.json` |
+| What a file holds | `{"savedAt": …, "expiresAt": …, "body": "<Garmin's reply, as text>"}`. An empty reply (204) is `""`. |
+| When the lifetime is decided | When the reply is saved. So a day saved while it was "yesterday" lasts 15 minutes, even once it's older. |
+| "Empty" | No sleep that night, a summary with every value null, or an activity list with none in it |
+| What is saved | Only a reply that was read without error. Errors, 404s, `privacyProtected` and replies we don't understand are never saved. |
+| Activity lists | One file per page. A search only comes from the cache if every page it needs is there; otherwise all its pages are fetched again. "Today" (so the profile) is looked up before the first page, so a profile error can't waste a download. |
+| An activity | From the cache only if both files (the activity and its laps) are fresh |
+| A clock turned back | A file saved "in the future" isn't trusted |
+| A broken file | Not our format, or a reply that no longer reads: deleted, then fetched again. Deleted even if that fetch fails. |
+| `displayName` and time zone in memory | Also remembered by each `GarminClient` for 7 days, so a run looks them up once, even if the cache can't be used or the time zone lookup is a 404 |
+| Whose folder | The cache only uses a folder it made: it writes a `.stride-mcp-cache` marker file when it creates one. An existing folder without the marker (yours, or the token folder) is never used, tightened or cleared. |
+| A folder that can't be used | Someone else's, a symlink, or no Unix permissions: nothing is read or saved, and the command still works by asking Garmin. `GarminCache.problem()` says why. |
+| Its own folder, loosened later | Tightened to `700` again, as for the token folder |
+| `logout` | Deletes the cache first (its own files, the marker, then the folder if that leaves it empty), then the tokens, so a token file that can't be deleted doesn't keep the data too. A symlinked folder is left alone. |
+| `login` | Leaves the cache alone. To switch Garmin accounts, run `logout` first, or the cache may answer with the last account's data (decided 23 October 2026). |
+
+**Skipping the cache.** `client.skippingCache()` returns the same client, except that it asks Garmin even if there's a fresh copy, and still saves the new reply. The four data methods keep their signatures, and step 6's `--no-cache` (and later an MCP tool's option) is one call: `(noCache ? client.skippingCache() : client).sleep(date)`. `displayName` and the time zone still come from the cache: they only build the addresses and decide what "today" is. `logout` resets them.
+
+**Shared file code.** The `700`/`600`, atomic-write and no-symlink code lives in `com.hammez.stride.files.PrivateFolder`, used by `TokenStore`, `capture` and the cache. It depends on nothing else in stride-mcp, so `garmin/auth` can use it. It throws plain I/O errors; each caller words them for the user.
+
 ## Getting real samples
 
 I (the agent) mustn't call Garmin with the owner's tokens. So the owner runs one command, which saves Garmin's raw replies, and sends me stripped copies.
@@ -380,11 +405,12 @@ com.hammez.stride
 │   ├── UnexpectedReplyException  a reply that isn't the shape we expect
 │   ├── GarminCache        reply files under ~/.stride-mcp/cache
 │   ├── GarminSamples      the capture command's calls
-│   ├── PrivateFolder      700 folder, 600 files, atomic writes (capture now, the cache later)
 │   └── ActivitySummary, ActivityDetails, Lap, DailySummary, Sleep
-└── garmin/auth/
-    ├── GarminApi          NEW: signed-in GET, refresh once on 401
-    └── NotFoundException  NEW: HTTP 404
+├── garmin/auth/
+│   ├── GarminApi          NEW: signed-in GET, refresh once on 401
+│   └── NotFoundException  NEW: HTTP 404
+└── files/
+    └── PrivateFolder      700 folder, 600 files, atomic writes, no symlinks (tokens, capture, cache)
 ```
 
 **No new libraries.** The JDK's HTTP client, Jackson 3 (already in Spring Boot) and the JDK's `java.time`.
@@ -401,7 +427,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 | Summary | Normal, all-null day, `privacyProtected` |
 | Sleep | Normal, no sleep (empty `dailySleepDTO`), 204 |
 | Dates | Profile time zone used for "today", fallback to computer's zone, `--days 7` range |
-| Cache | Fresh hit makes no request, stale entry refetched, `--no-cache`, broken file ignored, file permissions, `logout` clears it |
+| Cache | Fresh hit makes no request (also from a new client), stale entry refetched, skipping the cache, broken file ignored, file permissions, symlinked folder, `logout` clears it, errors not cached, each lifetime either side of its boundary (today, yesterday, older; empty older day 1 hour) |
 | CLI | Output for each command, bad id, bad date, bad `--days` |
 
 ## Steps
@@ -410,8 +436,8 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 2. ✅ **`GarminApi`** in `garmin/auth`, with `whoami` moved onto it, and the exception rename. Tests.
 3. ✅ **`capture` command.** Built and tested 23 October 2026. Next: the owner runs it and sends stripped samples.
 4. ✅ **Records and `GarminClient`**, parsed against fixtures made from the samples. Built and tested 23 October 2026.
-5. **`GarminCache`**. Tests. Also share the private-file code (`700` folder, `600` files, atomic writes) between `TokenStore`, `PrivateFolder` and the cache, in a package that `garmin/auth` can use without depending on the layers above it. Today `TokenStore` and `PrivateFolder` each have a copy (decided 23 October 2026).
-6. **CLI commands** `activities`, `activity`, `summary`, `sleep`. Tests.
+5. ✅ **`GarminCache`**. Tests. The private-file code is now shared in `com.hammez.stride.files` (decided and built 23 October 2026). See [How it works](#how-it-works-built-23-october-2026).
+6. **CLI commands** `activities`, `activity`, `summary`, `sleep`. Tests. Print `GarminCache.problem()` to stderr after a data command, so a cache that can't be used isn't silent.
 7. **Docs:** quick start, this doc, AGENTS.md status.
 8. **Live check** (owner): run each command, then run them again and see the cache answer.
 

@@ -70,7 +70,7 @@ This prints who you're logged in as. It refreshes the login by itself when neede
 stride-mcp logout
 ```
 
-This deletes the saved login.
+This deletes the saved login, and the cache of your Garmin data.
 
 ## If something goes wrong
 
@@ -88,6 +88,8 @@ This deletes the saved login.
 
 - Your login is saved in `~/.stride-mcp/garmin_tokens.json`, readable only by you. Treat it like a password.
 - Use `--stride.token-file=/some/path.json` to save it somewhere else.
+- Garmin's replies are cached in `~/.stride-mcp/cache`, also readable only by you. `--stride.cache-dir=/some/folder` moves it. Pick a folder that doesn't exist yet: stride-mcp creates it, and won't use one it didn't make.
+- Switching to a different Garmin account? Run `stride-mcp logout` first, so the cache is cleared.
 - Exit codes: `0` worked, `1` failed, `2` wrong usage.
 
 ## Next

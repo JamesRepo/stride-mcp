@@ -1,5 +1,6 @@
 package com.hammez.stride.garmin;
 
+import java.time.Duration;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -8,7 +9,7 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
 
 /**
  * Everything about Garmin's data endpoints that Garmin may change: paths, query parameter names and paging.
- * Keep these values here and nowhere else. Based on python-garminconnect (checked October 2026).
+ * Also how long the cache keeps each reply. Keep these values here and nowhere else. Based on python-garminconnect (checked October 2026).
  * Paths are templates: fill the {@code {…}} part with {@link #fill(String, String)}.
  *
  * @param socialProfilePath       who I am, with {@code displayName}
@@ -29,6 +30,7 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
  * @param sleepDateParam          the morning the night ended (YYYY-MM-DD)
  * @param sleepBufferParam        how many minutes either side of sleep to include
  * @param sleepBufferMinutes      the value sent for {@code sleepBufferParam}
+ * @param cacheLifetimes          how long the cache keeps each kind of reply
  */
 public record GarminDataConfig(
         String socialProfilePath,
@@ -48,7 +50,31 @@ public record GarminDataConfig(
         String sleepPath,
         String sleepDateParam,
         String sleepBufferParam,
-        int sleepBufferMinutes) {
+        int sleepBufferMinutes,
+        CacheLifetimes cacheLifetimes) {
+
+    /**
+     * How long {@link GarminCache} keeps a reply. "Today" is today in the Garmin profile's time zone.
+     * The lifetime is decided when the reply is saved, so a day fetched while it was "yesterday" still only lasts
+     * {@code recentDay}, even once it is older.
+     *
+     * @param profile          {@code displayName} and the time zone: they almost never change
+     * @param activity         one activity, and its laps: finished activities rarely change (renaming is the usual edit)
+     * @param olderActivities  an activity list whose range ends before yesterday: late uploads are possible but rare
+     * @param recentActivities an activity list whose range includes today or yesterday: a new one can sync any time
+     * @param recentDay        a daily summary or sleep for today or yesterday: still changing as the watch syncs
+     * @param olderDay         a daily summary or sleep for an older day: finished
+     * @param emptyOlderDay    an empty reply for an older day (no data, no sleep, no activities): a watch might sync late
+     */
+    public record CacheLifetimes(
+            Duration profile,
+            Duration activity,
+            Duration olderActivities,
+            Duration recentActivities,
+            Duration recentDay,
+            Duration olderDay,
+            Duration emptyOlderDay) {
+    }
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z]+}");
 
@@ -72,7 +98,15 @@ public record GarminDataConfig(
                 "/wellness-service/wellness/dailySleepData/{displayName}",
                 "date",
                 "nonSleepBufferMinutes",
-                60);
+                60,
+                new CacheLifetimes(
+                        Duration.ofDays(7),
+                        Duration.ofDays(7),
+                        Duration.ofDays(1),
+                        Duration.ofMinutes(10),
+                        Duration.ofMinutes(15),
+                        Duration.ofDays(30),
+                        Duration.ofHours(1)));
     }
 
     /**

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import com.hammez.stride.garmin.GarminCache;
 import com.hammez.stride.garmin.GarminDataConfig;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.auth.BrowserLogin;
@@ -43,6 +44,7 @@ class StrideCommandsTest {
     private final ByteArrayOutputStream err = new ByteArrayOutputStream();
     private final JsonMapper json = JsonMapper.builder().build();
     private TokenStore store;
+    private GarminCache cache;
     private StrideCommands commands;
 
     @BeforeEach
@@ -54,7 +56,8 @@ class StrideCommandsTest {
         var auth = new GarminAuth(new BrowserLogin(config, url -> true), null,
                 new ProfileClient(api, config, JsonMapper.builder().build()), store);
         var samples = new GarminSamples(api, GarminDataConfig.defaults(config), json, Clock.systemUTC(), ZoneOffset.UTC);
-        commands = new StrideCommands(auth, samples, io(), ZoneOffset.UTC);
+        cache = new GarminCache(temp.resolve("cache"), json, Clock.systemUTC());
+        commands = new StrideCommands(auth, samples, cache, io(), ZoneOffset.UTC);
     }
 
     private CliIo io() {
@@ -124,7 +127,7 @@ class StrideCommandsTest {
             Clock clock = Clock.fixed(Instant.parse("2026-10-23T12:00:00Z"), ZoneOffset.UTC);
             var samples = new GarminSamples(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
                     GarminDataConfig.defaults(garmin.config()), json, clock, ZoneOffset.UTC);
-            var capture = new StrideCommands(null, samples, io(), ZoneOffset.UTC);
+            var capture = new StrideCommands(null, samples, null, io(), ZoneOffset.UTC);
 
             assertThat(capture.run(List.of("capture", folder.toString()))).isZero();
         }
@@ -153,8 +156,53 @@ class StrideCommandsTest {
         assertThat(commands.run(List.of("logout"))).isZero();
         assertThat(commands.run(List.of("logout"))).isZero();
 
-        assertThat(out()).contains("Logged out.", "Already logged out.").doesNotContain("secret");
+        assertThat(out()).contains("Logged out.", "Already logged out.").doesNotContain("secret", "cache");
         assertThat(store.load()).isEmpty();
+    }
+
+    @Test
+    void logoutAlsoDeletesTheCache() throws Exception {
+        store.save(new GarminTokens("access-secret", "refresh-secret", "C", Instant.EPOCH, null));
+        Path dir = ownCacheFolder();
+        Files.writeString(dir.resolve("sleep-2026-10-22.json"), "{}");
+        Files.writeString(dir.resolve(".summary-2026-10-22.json123.tmp"), "{}");
+
+        assertThat(commands.run(List.of("logout"))).isZero();
+
+        assertThat(out()).contains("Logged out.", "Deleted the cache in " + dir);
+        assertThat(dir).doesNotExist();
+        assertThat(store.load()).isEmpty();
+    }
+
+    @Test
+    void logoutDeletesTheCacheEvenWhenAlreadyLoggedOut() throws Exception {
+        Path dir = ownCacheFolder();
+        Files.writeString(dir.resolve("social-profile.json"), "{}");
+
+        assertThat(commands.run(List.of("logout"))).isZero();
+
+        assertThat(out()).contains("Already logged out.", "Deleted the cache in " + dir);
+        assertThat(dir).doesNotExist();
+    }
+
+    @Test
+    void logoutDeletesTheCacheEvenIfTheTokenFileCantBeDeleted() throws Exception {
+        Path dir = ownCacheFolder();
+        Files.writeString(dir.resolve("sleep-2026-10-22.json"), "{}");
+        // A non-empty folder where the token file should be can't be deleted.
+        Files.createDirectories(store.file().resolve("blocker"));
+
+        assertThat(commands.run(List.of("logout"))).isEqualTo(1);
+
+        assertThat(err()).contains("Couldn't delete the token file");
+        assertThat(dir).doesNotExist();
+    }
+
+    /** A cache folder as GarminCache makes it: with its marker file. */
+    private Path ownCacheFolder() throws Exception {
+        Path dir = Files.createDirectory(temp.resolve("cache"));
+        Files.writeString(dir.resolve(".stride-mcp-cache"), "");
+        return dir;
     }
 
     @Test
