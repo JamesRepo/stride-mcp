@@ -6,6 +6,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HexFormat;
@@ -91,8 +92,19 @@ public class GarminClient {
      * @param type Garmin's type key, such as {@code running}, or null for all types
      * @return empty if there are none
      * @throws GarminException if there are more than the page limit allows (200)
+     * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
+     *         {@link GarminDataConfig#MAX_RANGE_DAYS}. Callers check their own input first; this is a safety net,
+     *         so nothing is sent to Garmin.
      */
     public List<ActivitySummary> activities(LocalDate from, LocalDate to, String type) {
+        if (from.isAfter(to)) {
+            throw new IllegalArgumentException("from " + from + " is after to " + to + ". Put the earlier date first.");
+        }
+        if (ChronoUnit.DAYS.between(from, to) + 1 > GarminDataConfig.MAX_RANGE_DAYS) {
+            throw new IllegalArgumentException("from " + from + " to " + to + " is more than "
+                    + GarminDataConfig.MAX_RANGE_DAYS + " days. Ask for at most " + GarminDataConfig.MAX_RANGE_DAYS
+                    + " days, both ends included.");
+        }
         String what = "the activities from " + from + " to " + to;
         String name = "activities-" + from + "-to-" + to + (type == null ? "" : "-" + fileSafe(type));
         if (!skipCache) {

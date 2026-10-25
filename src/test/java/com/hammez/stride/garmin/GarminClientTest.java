@@ -150,6 +150,33 @@ class GarminClientTest {
     }
 
     @Test
+    void activitiesAllowsTheLongestRange() {
+        signedInAs("{}");
+        garmin.respond(ACTIVITIES, 200, "[]");
+
+        assertThat(client.activities(LocalDate.of(2026, 7, 26), OCT_23, null)).isEmpty();
+
+        assertThat(garmin.requests(ACTIVITIES).getFirst().queryParams()).containsEntry("startDate", "2026-07-26");
+    }
+
+    @Test
+    void activitiesRefusesARangeOverTheLimit() {
+        assertThat(catchThrowable(() -> client.activities(LocalDate.of(2026, 7, 25), OCT_23, null)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("from 2026-07-25 to 2026-10-23 is more than 90 days. Ask for at most 90 days, "
+                        + "both ends included.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void activitiesRefusesFromAfterTo() {
+        assertThat(catchThrowable(() -> client.activities(OCT_23, LocalDate.of(2026, 10, 22), null)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessage("from 2026-10-23 is after to 2026-10-22. Put the earlier date first.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
     void activitiesThatArentAListAreAnUnexpectedReply() {
         signedInAs("{}");
         garmin.respond(ACTIVITIES, 200, "{\"activities\":[]}")

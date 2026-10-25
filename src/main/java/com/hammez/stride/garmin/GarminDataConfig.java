@@ -83,6 +83,13 @@ public record GarminDataConfig(
             Duration emptyOlderDay) {
     }
 
+    /**
+     * The longest date range, in days with both ends included, that stride-mcp asks Garmin for in one search.
+     * Our rule, not Garmin's, so it's a constant rather than a field: the CLI's {@code --days} and the MCP tools'
+     * {@code from}/{@code to} both check against it, and so does {@link GarminClient#activities}.
+     */
+    public static final int MAX_RANGE_DAYS = 90;
+
     /** The query for {@code weighInsPath}: every weigh-in that day. The client and {@code capture} both send this. */
     public Map<String, String> weighInsQuery() {
         return Map.of(weighInsAllParam, "true");

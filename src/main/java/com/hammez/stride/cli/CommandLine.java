@@ -3,6 +3,8 @@ package com.hammez.stride.cli;
 import java.util.ArrayList;
 import java.util.List;
 
+import com.hammez.stride.garmin.GarminDataConfig;
+
 /**
  * The command line, read from the raw arguments in order, so both {@code --days 7} and {@code --days=7} work.
  * Spring only sees {@code --days=7} as one option: with a space it splits off the {@code 7}, and the order of
@@ -14,7 +16,7 @@ import java.util.List;
  *
  * @param command   the first argument that isn't an option, or null if there is none
  * @param arguments the other arguments that aren't options
- * @param days      {@code --days}, checked to be 1–90, or null if not given
+ * @param days      {@code --days}, checked to be 1 to {@link GarminDataConfig#MAX_RANGE_DAYS}, or null if not given
  * @param type      {@code --type}, or null if not given
  * @param noCache   {@code --no-cache}
  * @param help      {@code --help}
@@ -22,8 +24,7 @@ import java.util.List;
 record CommandLine(String command, List<String> arguments, Integer days, String type, boolean noCache,
         boolean help) {
 
-    static final int MAX_DAYS = 90;
-    static final String DAYS_RANGE = "--days must be between 1 and " + MAX_DAYS + ".";
+    static final String DAYS_RANGE = "--days must be between 1 and " + GarminDataConfig.MAX_RANGE_DAYS + ".";
 
     CommandLine {
         arguments = List.copyOf(arguments);
@@ -87,7 +88,7 @@ record CommandLine(String command, List<String> arguments, Integer days, String 
     private static int days(String value) {
         try {
             int days = Integer.parseInt(value);
-            if (days >= 1 && days <= MAX_DAYS) {
+            if (days >= 1 && days <= GarminDataConfig.MAX_RANGE_DAYS) {
                 return days;
             }
         } catch (NumberFormatException e) {

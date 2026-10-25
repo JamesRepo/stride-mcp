@@ -22,6 +22,7 @@ import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.GarminCache;
 import com.hammez.stride.garmin.GarminClient;
+import com.hammez.stride.garmin.GarminDataConfig;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.GarminSamples.Capture;
 import com.hammez.stride.garmin.GarminSamples.Saved;
@@ -51,7 +52,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               whoami            Show who you're signed in as (refreshes the session if needed)
               logout            Delete the saved session and the cache
               activities        Your activities from the last 7 days, newest first
-                --days N          The last N days instead, today included (1 to 90)
+                --days N          The last N days instead, today included (1 to %d)
                 --type T          Only this type, as Garmin names it: running, cycling, trail_running...
               activity <id>     One activity: totals, heart rate, training effect and laps. The id is in activities.
               summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery, the sleep
@@ -64,7 +65,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
             --no-cache            With activities, activity, summary or sleep: ask Garmin even if the cache
                                   has a fresh copy. The new reply is still cached.
-            """;
+            """.formatted(GarminDataConfig.MAX_RANGE_DAYS);
 
     public static final String SERVE_ARGUMENTS =
             "serve takes no arguments or options, only Spring settings such as --stride.token-file=…";

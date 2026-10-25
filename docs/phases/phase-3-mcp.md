@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Next: step 3, the shared 90-day limit._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Next: step 4, the tools._
 
 ## What changes
 
@@ -111,7 +111,7 @@ Each tool is marked read-only and not destructive, with MCP's tool hints (`readO
 
 The AI reads the descriptions to choose a tool. So they say what comes back, what the inputs mean (with formats and units) and when to use the tool. Drafts:
 
-> **get_activities**: Lists the owner's Garmin Connect activities (runs, rides, strength sessions, walks and others) that started between two dates, newest first. For each: id, name, type, local start time, distance in km, time, moving time, average pace per km, elevation gain in metres, average and max heart rate in bpm, and calories. Use it for questions about training over a period, such as "how was my training this week?" or "how far did I run in September?". Then use get_activity with an id for laps, cadence, power and training effect. `from` and `to` are dates like 2026-10-22, both included, at most 90 days apart. Leave both out for the last 7 days. The reply also gives today's date in the owner's time zone.
+> **get_activities**: Lists the owner's Garmin Connect activities (runs, rides, strength sessions, walks and others) that started between two dates, newest first. For each: id, name, type, local start time, distance in km, time, moving time, average pace per km, elevation gain in metres, average and max heart rate in bpm, and calories. Use it for questions about training over a period, such as "how was my training this week?" or "how far did I run in September?". Then use get_activity with an id for laps, cadence, power and training effect. `from` and `to` are dates like 2026-10-22, both included, covering at most 90 days (for example 2026-07-26 to 2026-10-23). Leave both out for the last 7 days. The reply also gives today's date in the owner's time zone.
 
 > **get_activity**: One Garmin activity in detail: start time, type, distance, time and moving time, pace and fastest pace, elevation gain, heart rate, cadence, power, calories, aerobic and anaerobic training effect (0 to 5), training load, and each lap's distance, time, pace, heart rate and elevation. Fields Garmin didn't record are left out. `id` is a number from get_activities.
 
@@ -207,8 +207,9 @@ The CLI runs for a second. The server runs as long as the AI app does. What that
 
 The CLI and the tools check the same things. Neither layer may depend on the other, so the shared parts move down into `garmin/`:
 
-- The 90-day limit moves from `cli/CommandLine` to `GarminDataConfig`.
+- The 90-day limit moves from `cli/CommandLine` to `GarminDataConfig.MAX_RANGE_DAYS`. It's a constant, not a record field: it's our rule, not a Garmin detail, and the CLI reads it from static code.
 - Each layer still reads its own input: `--days 7` on the command line, `from` and `to` in the tools.
+- `GarminClient.activities` also refuses `from` after `to`, or more than 90 days, before sending anything. It's a safety net under both layers, so its message is plain (`IllegalArgumentException`). Users see the CLI's or the tool's own message.
 
 ## Code layout
 
@@ -260,7 +261,7 @@ At the live check:
 
 1. ✅ **Plan:** this doc. Drafted 24 October 2026, approved 25 October 2026.
 2. ✅ **Dependencies and `serve`:** Spring Boot 4.1.2, Spring AI 2.0.2, webmvc and actuator dropped. `serve` mode with the server off elsewhere, stdout kept clean, logs to a file, waits until stdin closes. Settled: see [Settled in step 2](#settled-in-step-2-25-october-2026). Done 25 October 2026. Tests: a server with no tools answers `initialize` and `tools/list`, and stdout carries only JSON-RPC.
-3. **Shared rules:** the 90-day limit into `GarminDataConfig`. Tests.
+3. ✅ **Shared rules:** the 90-day limit into `GarminDataConfig.MAX_RANGE_DAYS`, used by the CLI's check and usage text. `GarminClient.activities` refuses a bad range as a safety net. Done 25 October 2026. Tests: the CLI's wording is unchanged, and the client refuses 91 days or `from` after `to` with nothing sent to Garmin.
 4. **The tools and their replies** in `mcp/`, with descriptions. Tests against the fixtures.
 5. **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Tests for each row of [Errors](#errors).
 6. **End to end over stdio:** the piped-stream test, and the side-by-side test.

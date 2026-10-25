@@ -635,8 +635,8 @@ class DataCommandsTest {
         assertThat(run("--help")).isZero();
         assertThat(run("activities", "--help")).isZero();
 
-        assertThat(out()).contains("activities", "--days N", "--type T", "activity <id>", "summary [date]",
-                "sleep [date]", "--no-cache", "Dates look like 2026-10-22.");
+        assertThat(out()).contains("activities", "--days N", "today included (1 to 90)", "--type T", "activity <id>",
+                "summary [date]", "sleep [date]", "--no-cache", "Dates look like 2026-10-22.");
         assertThat(err()).isEmpty();
         assertThat(garmin.requests()).isEmpty();
     }
