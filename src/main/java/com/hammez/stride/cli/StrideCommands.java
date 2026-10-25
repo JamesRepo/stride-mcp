@@ -59,11 +59,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               sleep [date]      The night that ended on that morning. Default last night.
               capture <folder>  Save Garmin's raw replies (about 13 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
+              serve             Start the MCP server, over stdin and stdout. An AI app runs this, not you.
 
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
             --no-cache            With activities, activity, summary or sleep: ask Garmin even if the cache
                                   has a fresh copy. The new reply is still cached.
             """;
+
+    public static final String SERVE_ARGUMENTS =
+            "serve takes no arguments or options, only Spring settings such as --stride.token-file=…";
 
     private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep");
     private static final int DEFAULT_DAYS = 7;
@@ -89,6 +93,21 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         this.client = client;
         this.io = io;
         this.zone = zone;
+    }
+
+    /**
+     * True if the command line is {@code serve} and nothing else but Spring settings. {@code main} asks this before
+     * Spring starts. Anything else, a wrong {@code serve} line included, is left to the commands to report, so both
+     * modes read the command line the same way.
+     */
+    public static boolean isServe(String[] args) {
+        try {
+            CommandLine line = CommandLine.parse(Arrays.asList(args));
+            return "serve".equals(line.command()) && line.arguments().isEmpty() && !line.help() && !line.noCache()
+                    && line.days() == null && line.type() == null;
+        } catch (UsageException e) {
+            return false;
+        }
     }
 
     /** Reads the raw arguments, not Spring's split of them: see {@link CommandLine}. */
@@ -193,6 +212,8 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
                 Path folder = captureFolder(line.arguments().getFirst());
                 yield () -> capture(folder);
             }
+            // Only a wrong serve line gets here: a right one never starts the commands. See isServe.
+            case "serve" -> throw new UsageException(SERVE_ARGUMENTS, true);
             case "help", "-h" -> {
                 arguments(line, 0, 0);
                 yield () -> io.out().print(USAGE);

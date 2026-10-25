@@ -81,7 +81,45 @@ class StrideCommandsTest {
     @Test
     void helpPrintsUsage() {
         assertThat(commands.run(List.of("help"))).isZero();
-        assertThat(out()).contains("login", "whoami", "logout", "capture <folder>");
+        assertThat(out()).contains("login", "whoami", "logout", "capture <folder>", "serve");
+    }
+
+    @Test
+    void serveIsPickedOnlyForAPlainServeLine() {
+        assertThat(StrideCommands.isServe(new String[] { "serve" })).isTrue();
+        assertThat(StrideCommands.isServe(new String[] { "--stride.token-file=t.json", "serve" })).isTrue();
+        assertThat(StrideCommands.isServe(new String[] { "serve", "--stride.cache-dir=c" })).isTrue();
+
+        assertThat(StrideCommands.isServe(new String[] {})).isFalse();
+        assertThat(StrideCommands.isServe(new String[] { "activities", "serve" })).isFalse();
+        // The same reading as the commands: --type takes the next argument, so serve is still the command here,
+        // but with an option it doesn't take. The commands report that.
+        assertThat(StrideCommands.isServe(new String[] { "--type", "running", "serve" })).isFalse();
+        assertThat(StrideCommands.isServe(new String[] { "--help", "serve" })).isFalse();
+        assertThat(StrideCommands.isServe(new String[] { "serve", "extra" })).isFalse();
+        assertThat(StrideCommands.isServe(new String[] { "serve", "--no-cache" })).isFalse();
+        assertThat(StrideCommands.isServe(new String[] { "serve", "--bogus" })).isFalse();
+    }
+
+    @Test
+    void aWrongServeLineIsAUsageError() {
+        assertThat(commands.run(List.of("serve", "extra"))).isEqualTo(2);
+        assertThat(commands.run(List.of("serve", "serve"))).isEqualTo(2);
+        assertThat(err()).contains(StrideCommands.SERVE_ARGUMENTS, "Usage:");
+    }
+
+    @Test
+    void optionsOnServeAreUsageErrors() {
+        assertThat(commands.run(List.of("--type", "running", "serve"))).isEqualTo(2);
+        assertThat(commands.run(List.of("serve", "--no-cache"))).isEqualTo(2);
+        assertThat(err()).contains("--days and --type only work with activities.",
+                "--no-cache only works with activities, activity, summary and sleep.");
+    }
+
+    @Test
+    void helpBeforeServePrintsUsage() {
+        assertThat(commands.run(List.of("--help", "serve"))).isZero();
+        assertThat(out()).contains("Usage:", "serve");
     }
 
     @Test

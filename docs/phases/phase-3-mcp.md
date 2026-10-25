@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Next: step 2, dependencies and `serve`._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Next: step 3, the shared 90-day limit._
 
 ## What changes
 
@@ -52,7 +52,7 @@ java -jar stride-mcp.jar serve
 | stdin | My paste at `login` | MCP messages from the AI app |
 | stdout | The command's output | **MCP messages only** |
 | Logs | Warnings only, to the console as now | To a file, never the console |
-| Ends | After the command, with its exit code | When the AI app closes stdin |
+| Ends | After the command, with its exit code | When the AI app closes stdin (exit `0`). Exit `1` if it couldn't start, or couldn't read what the AI app sent, with the reason on stderr. |
 
 `main` decides the mode before Spring starts: `serve` turns on a Spring profile, also called `serve`. Without it, the MCP server is off. This matters: the server reads stdin, and so does `login`.
 
@@ -61,22 +61,29 @@ java -jar stride-mcp.jar serve
 **Keeping stdout clean.** In `serve` mode:
 
 - No banner (already off), no startup info (already off), console logging off.
-- Logs go to `~/.stride-mcp/stride-mcp.log`. That folder is already `700`. Warnings and errors only, plus one line per tool call (tool name, how long it took, whether it worked). Never tokens, never Garmin's replies.
+- Logs go to `~/.stride-mcp/stride-mcp.log`, a `600` file. A missing folder is created as `700`; an existing one is left alone, in case it's one the owner named with `--stride.log-file`. A link or a folder at the log path is refused. No log rolling (it would create new files open to others): instead, at startup a log over 10 MB becomes `stride-mcp.log.old` and a new one starts. Warnings and errors only, plus one line per tool call (tool name, how long it took, whether it worked). Never tokens, never Garmin's replies.
 - Belt and braces: the server keeps the real stdout for itself, then points `System.out` at stderr. So a stray `println` anywhere can't break the connection. AI apps keep a server's stderr as its log.
 
 `serve` takes no options except the Spring settings (`--stride.token-file=…`, `--stride.cache-dir=…`). `whoami`, `capture` and the others don't change.
 
-### To confirm in step 2
+### Settled in step 2 (25 October 2026)
 
-Things the docs don't say clearly, settled by the first build with a test:
+Answered by reading Spring AI 2.0.2's and the MCP Java SDK 2.1.0's source, then checked with tests.
 
-| Question | Plan if the answer is no |
-|---|---|
-| `spring.ai.mcp.server.enabled=false` turns the server off for CLI commands | Exclude the auto-configuration outside `serve` |
-| The stdio transport needs `spring.ai.mcp.server.stdio=true` with this starter | Set it either way, in the `serve` profile |
-| Our own transport bean (with the stdout we kept) replaces the default one | Redirect `System.out` before Spring starts, keeping the real stream for the transport |
-| `spring.ai.mcp.server.instructions` sets the server's instructions for the AI | Put the same text in each tool's description |
-| A `RuntimeException` from a tool becomes an error result the AI sees (as the docs say) | Catch `GarminException` in the tools and build the error result ourselves |
+| Question | Answer | What we did |
+|---|---|---|
+| `spring.ai.mcp.server.enabled=false` turns the server off for CLI commands | Yes, but not all of it. Spring AI's annotation scanner has its own switch. Left on, it logs warnings to the console. | CLI mode sets both `spring.ai.mcp.server.enabled=false` and `spring.ai.mcp.server.annotation-scanner.enabled=false`. A test checks that no MCP bean exists outside `serve`. |
+| The stdio transport needs `spring.ai.mcp.server.stdio=true` | No. This starter always builds a stdio transport. The setting only turns off the stateless and web variants. | Set anyway, in the `serve` profile, so the intent is clear |
+| Our own transport bean replaces the default one | Yes (`@ConditionalOnMissingBean`) | `mcp/StdioServer` uses the stdout that `main` kept. It also notices when the connection ends: see below. |
+| `spring.ai.mcp.server.instructions` sets the server's instructions | Yes. The AI gets them in the `initialize` reply. | Set in the `serve` profile |
+| A `RuntimeException` from a tool becomes an error result | Yes, but the text is the exception's message **twice**, plus its root cause's message. A checked exception becomes a protocol error instead. | Step 5: the tools catch everything themselves and build the error result, so the AI only sees our wording and a bug's details stay in the log (the plan's fallback) |
+
+Two more things found:
+
+- **The SDK doesn't say when stdin closes.** `StdioServer` wraps the session's transport and waits for its close. That also covers the SDK giving up on a line it can't parse, so `serve` ends instead of hanging. It watches stdin too, to tell the two apart: the first exits `0`, the second `1`.
+- **Replies still being worked on when stdin closes are dropped** (by the SDK). That matches the MCP spec: for stdio, closing stdin is how the client ends the session, so it no longer expects replies. AI apps keep stdin open while they wait. Tests and scripts must too: they wait for each reply before closing stdin.
+
+Also in the `serve` profile: only the tools capability is offered (no prompts, resources or completions), and `listChanged` is off because the tools never change while the server runs.
 
 ## The tools
 
@@ -213,12 +220,16 @@ com.hammez.stride
 │   ├── GarminTools        the four tools: inputs checked, then GarminClient
 │   ├── ToolReplies        records into the JSON shapes above (km, pace, local times)
 │   ├── ActivitiesReply, ActivityReply, DayReply, SleepReply
-│   └── McpBeans           serve mode: the transport, stdout kept for it, server name and instructions
+│   ├── McpBeans           serve mode: the transport bean
+│   ├── StdioServer        the SDK's stdio transport on the kept stdout, and a wait until it closes
+│   ├── McpStreams         stdin and the kept stdout, handed over by main
+│   └── PrivateLogFile     gets the log file ready (600, no links, kept small) before logging opens it
 ├── garmin/                unchanged, plus the 90-day limit in GarminDataConfig
 └── garmin/auth/           unchanged
 src/main/resources/
 ├── application.properties         + MCP server off
-└── application-serve.properties   MCP server on (stdio), console logging off, log file
+├── application-serve.properties   MCP server on (stdio), the log file
+└── logback-serve.xml              serve mode's logging: one file, appended to, no console
 ```
 
 ## Tests
@@ -248,10 +259,10 @@ At the live check:
 ## Steps
 
 1. ✅ **Plan:** this doc. Drafted 24 October 2026, approved 25 October 2026.
-2. **Dependencies and `serve`:** Spring Boot 4.1.2, Spring AI 2.0.2, webmvc and actuator dropped. `serve` mode with the server off elsewhere, stdout kept clean, logs to a file, waits until stdin closes. Settle [To confirm in step 2](#to-confirm-in-step-2). Tests: a server with no tools answers `initialize` and `tools/list`, and stdout carries only JSON-RPC.
+2. ✅ **Dependencies and `serve`:** Spring Boot 4.1.2, Spring AI 2.0.2, webmvc and actuator dropped. `serve` mode with the server off elsewhere, stdout kept clean, logs to a file, waits until stdin closes. Settled: see [Settled in step 2](#settled-in-step-2-25-october-2026). Done 25 October 2026. Tests: a server with no tools answers `initialize` and `tools/list`, and stdout carries only JSON-RPC.
 3. **Shared rules:** the 90-day limit into `GarminDataConfig`. Tests.
 4. **The tools and their replies** in `mcp/`, with descriptions. Tests against the fixtures.
-5. **Errors** as tool errors, with CLI wording replaced where needed. Tests for each row of [Errors](#errors).
+5. **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Tests for each row of [Errors](#errors).
 6. **End to end over stdio:** the piped-stream test, and the side-by-side test.
 7. **Docs:** [Running it](../running.md) gets the `serve` command. The quick start gets a short "Use it from an AI app" section. AGENTS.md status.
 8. **Live check** (owner): add stride-mcp to Claude Code (`claude mcp add stride -- java -jar …/stride-mcp.jar serve`), ask "how was my training this week?", then the questions in [What I should see](#what-i-should-see). Then the same in Codex CLI, since it must work with any MCP app.

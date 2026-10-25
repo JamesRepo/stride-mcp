@@ -16,7 +16,7 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 - **Phase 1 (command-line login):** built and tested. The owner ran `login` and `whoami` live on 23 October 2026 and both worked. The first automatic token refresh worked live on 24 October 2026. Still to confirm: it still works days later. Plan: `docs/phases/phase-1-login.md`.
 - **Phase 2 (fetch real data):** done 24 October 2026. The CLI commands `activities`, `activity`, `summary` and `sleep` (with `--no-cache`) and the reply cache are built and tested, and passed the owner's live check. Fixtures from real replies (23 October 2026) are in `src/test/resources/garmin/`. Still open: whether `--type running` also returns trail and treadmill runs. Plan and live-check results: `docs/phases/phase-2-data.md`.
 - **Summary extras (25 October 2026):** `summary` also shows the night's sleep and the day's weight and body composition. Built and tested. A real capture confirmed the reply's shape for a day with no weigh-ins. Still to confirm, from a day with a weigh-in: one weigh-in's field names, and that masses are in grams.
-- **Phase 3 (MCP server):** plan approved 25 October 2026. Next: step 2 (Spring AI 2.0.2 with Spring Boot 4.1.2, the `serve` command, stdout kept clean). Plan: `docs/phases/phase-3-mcp.md`.
+- **Phase 3 (MCP server):** plan approved 25 October 2026. Step 2 done 25 October 2026: Spring AI 2.0.2 on Spring Boot 4.1.2, and `serve` answers over stdio with no tools yet. stdout carries only MCP messages, and logs go to `~/.stride-mcp/stride-mcp.log`. Next: step 3 (the 90-day limit into `GarminDataConfig`), then the tools. Plan: `docs/phases/phase-3-mcp.md`.
 - `spike/` holds throwaway experiments, run as single-file Java (`java spike/GarminLoginSpike.java probe`). It's not part of the build. Don't build on it.
 - Later phases are outlined in `docs/project-plan.md`. Don't start them unless asked.
 
@@ -24,7 +24,7 @@ Read `docs/README.md` first. Then read the doc for whatever phase you're working
 
 - Java 25, Spring Boot 4.1 (Spring Framework 7, Jackson 3)
 - Maven via the wrapper (`./mvnw`). Don't assume a global `mvn`.
-- Planned: Spring AI 2.0.2 MCP server starter, stdio (phase 3)
+- Spring AI 2.0.2 MCP server starter (`spring-ai-starter-mcp-server`), stdio
 - HTTP to Garmin: the JDK's `java.net.http.HttpClient`. Don't add an HTTP library without a reason.
 
 ## Commands
