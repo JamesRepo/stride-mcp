@@ -1,6 +1,7 @@
 package com.hammez.stride.garmin;
 
 import java.time.Duration;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -30,6 +31,8 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
  * @param sleepDateParam          the morning the night ended (YYYY-MM-DD)
  * @param sleepBufferParam        how many minutes either side of sleep to include
  * @param sleepBufferMinutes      the value sent for {@code sleepBufferParam}
+ * @param weighInsPath            one day's weigh-ins, by {@code {date}} (YYYY-MM-DD)
+ * @param weighInsAllParam        asks for every weigh-in that day, not just one; see {@link #weighInsQuery()}
  * @param cacheLifetimes          how long the cache keeps each kind of reply
  */
 public record GarminDataConfig(
@@ -51,6 +54,8 @@ public record GarminDataConfig(
         String sleepDateParam,
         String sleepBufferParam,
         int sleepBufferMinutes,
+        String weighInsPath,
+        String weighInsAllParam,
         CacheLifetimes cacheLifetimes) {
 
     /**
@@ -62,9 +67,11 @@ public record GarminDataConfig(
      * @param activity         one activity, and its laps: finished activities rarely change (renaming is the usual edit)
      * @param olderActivities  an activity list whose range ends before yesterday: late uploads are possible but rare
      * @param recentActivities an activity list whose range includes today or yesterday: a new one can sync any time
-     * @param recentDay        a daily summary or sleep for today or yesterday: still changing as the watch syncs
-     * @param olderDay         a daily summary or sleep for an older day: finished
-     * @param emptyOlderDay    an empty reply for an older day (no data, no sleep, no activities): a watch might sync late
+     * @param recentDay        a daily summary, sleep or weigh-ins for today or yesterday: still changing as the watch
+     *                         or scale syncs
+     * @param olderDay         a daily summary, sleep or weigh-ins for an older day: finished
+     * @param emptyOlderDay    an empty reply for an older day (no data, no sleep, no weigh-ins, no activities): a watch
+     *                         or scale might sync late
      */
     public record CacheLifetimes(
             Duration profile,
@@ -74,6 +81,11 @@ public record GarminDataConfig(
             Duration recentDay,
             Duration olderDay,
             Duration emptyOlderDay) {
+    }
+
+    /** The query for {@code weighInsPath}: every weigh-in that day. The client and {@code capture} both send this. */
+    public Map<String, String> weighInsQuery() {
+        return Map.of(weighInsAllParam, "true");
     }
 
     private static final Pattern PLACEHOLDER = Pattern.compile("\\{[A-Za-z]+}");
@@ -99,6 +111,8 @@ public record GarminDataConfig(
                 "date",
                 "nonSleepBufferMinutes",
                 60,
+                "/weight-service/weight/dayview/{date}",
+                "includeAll",
                 new CacheLifetimes(
                         Duration.ofDays(7),
                         Duration.ofDays(7),

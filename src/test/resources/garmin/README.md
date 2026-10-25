@@ -11,6 +11,7 @@ Real replies from Garmin Connect, captured with `stride-mcp capture` on 23 Octob
 | `summary-today.json`, `summary-past.json` | 23 October and 23 September 2026 |
 | `sleep-last-night.json` | The night of 22–23 October |
 | `sleep-none.json` | 1 January 2000: a 200 whose `dailySleepDTO` fields are all null |
+| `weight-none.json` | 1 January 2000: a 200 with an empty `dateWeightList` and an all-null `totalAverage`. Captured 25 October 2026, unchanged. |
 
 How they were changed from the raw replies:
 
@@ -19,3 +20,5 @@ How they were changed from the raw replies:
 - **Trimmed:** `userRoles` removed from the profile and each activity. Every list in the sleep reply cut to its first 3 entries.
 
 Made-up variants (missing fields, odd values) live in the tests themselves, not here.
+
+No real day **with** weigh-ins has been captured yet (25 October 2026: the owner hadn't weighed in). Until one is, the tests use a made-up one: `Fixtures.TWO_WEIGH_INS`. Replace it with a stripped `weight-today.json` from `capture`.

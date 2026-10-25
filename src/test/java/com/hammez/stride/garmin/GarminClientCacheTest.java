@@ -98,17 +98,20 @@ class GarminClientCacheTest {
         garmin.respond(SLEEP, 200, fixture("sleep-last-night.json"))
                 .respond(SUMMARY, 200, "{}")
                 .respond(ACTIVITY, 200, fixture("activity.json")).respond(SPLITS, 200, fixture("activity-splits.json"))
-                .respond(ACTIVITIES, 200, "[]");
+                .respond(ACTIVITIES, 200, "[]")
+                .respond(weight(OLDER), 200, "{}");
         GarminClient client = client();
 
         client.sleep(OLDER);
         client.dailySummary(OLDER);
         client.activity(24816092240L);
         client.activities(OLDER.minusDays(6), OLDER, "trail_running");
+        client.weighIns(OLDER);
 
         assertThat(cacheFiles()).containsExactlyInAnyOrder("social-profile.json", "personal-information.json",
                 "sleep-2026-10-22.json", "summary-2026-10-22.json", "activity-24816092240.json",
-                "activity-24816092240-splits.json", "activities-2026-10-16-to-2026-10-22-trail_running-page-1.json");
+                "activity-24816092240-splits.json", "activities-2026-10-16-to-2026-10-22-trail_running-page-1.json",
+                "weight-2026-10-22.json");
     }
 
     @Test
@@ -365,6 +368,17 @@ class GarminClientCacheTest {
     }
 
     @Test
+    void weighInsLastLikeTheOtherDailyData() {
+        signedIn();
+        signedIn();
+        String twoWeighIns = Fixtures.TWO_WEIGH_INS;
+        expectLifetime(Duration.ofMinutes(15), weight(TODAY), twoWeighIns, () -> client().weighIns(TODAY));
+        expectLifetime(Duration.ofDays(30), weight(OLDER), twoWeighIns, () -> client().weighIns(OLDER));
+        expectLifetime(Duration.ofHours(1), weight(OLDER.minusDays(1)), "{\"dateWeightList\":[]}",
+                () -> client().weighIns(OLDER.minusDays(1)));
+    }
+
+    @Test
     void anEmptyReplyForAnOlderDayLastsAnHour() {
         signedIn();
         // Real: a night with no sleep is a 200 with a dailySleepDTO full of nulls.
@@ -415,6 +429,10 @@ class GarminClientCacheTest {
         clock.advance(Duration.ofDays(1));
         signedIn();
         assertThat(client().dailySummary(YESTERDAY).steps()).isEqualTo(200);
+    }
+
+    private static String weight(LocalDate date) {
+        return "/weight-service/weight/dayview/" + date;
     }
 
     /**

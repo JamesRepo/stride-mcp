@@ -72,7 +72,7 @@ Four commands. The examples come from real Garmin replies (October 2026).
 |---|---|
 | `activities [--days N] [--type T]` | Your activities, newest first |
 | `activity <id>` | One activity, with its laps |
-| `summary [date]` | One day's totals |
+| `summary [date]` | One day's totals, last night's sleep, and weight |
 | `sleep [date]` | One night's sleep |
 
 ### Activities
@@ -117,9 +117,14 @@ Distance         3.18 km
 Calories         1,417 kcal (222 active)
 Heart rate       resting 45, min 43, max 130 bpm
 …
+Sleep            8:52:00, score 91 (Excellent)
+Weight           75.4 kg
+  Body fat       18.6%
+  Muscle mass    33.1 kg (44% of weight)
+…
 ```
 
-It also shows stress, Body Battery, intensity minutes and floors climbed. With no date, it's today.
+It also shows stress, Body Battery, intensity minutes and floors climbed. Sleep is the night that ended that morning. Weight is that day's latest weigh-in, with the latest body composition your scale sent that day. A part with no data is left out. If Garmin's reply for sleep or weight can't be read, that part is left out with a line saying why, and you still get the totals. With no date, it's today.
 
 ### Sleep
 
@@ -159,7 +164,7 @@ Garmin's replies are kept on disk, so running a command again answers from there
 | What | Kept for |
 |---|---|
 | Anything for today or yesterday | 10–15 minutes |
-| An older day's summary or sleep | 30 days |
+| An older day's summary, sleep or weight | 30 days |
 | An older list of activities | 1 day |
 | One activity | 7 days |
 

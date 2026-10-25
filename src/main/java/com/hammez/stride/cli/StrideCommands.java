@@ -10,21 +10,28 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ExitCodeGenerator;
 
 import com.hammez.stride.garmin.ActivitySummary;
+import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.GarminCache;
 import com.hammez.stride.garmin.GarminClient;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.GarminSamples.Capture;
 import com.hammez.stride.garmin.GarminSamples.Saved;
+import com.hammez.stride.garmin.Sleep;
+import com.hammez.stride.garmin.UnexpectedReplyException;
+import com.hammez.stride.garmin.WeighIn;
 import com.hammez.stride.garmin.auth.GarminAuth;
 import com.hammez.stride.garmin.auth.GarminAuth.WhoAmI;
 import com.hammez.stride.garmin.auth.GarminException;
+import com.hammez.stride.garmin.auth.NotFoundException;
 
 /**
  * The commands: {@code login}, {@code whoami}, {@code logout}, the data commands ({@code activities},
@@ -47,9 +54,10 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
                 --days N          The last N days instead, today included (1 to 90)
                 --type T          Only this type, as Garmin names it: running, cycling, trail_running...
               activity <id>     One activity: totals, heart rate, training effect and laps. The id is in activities.
-              summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery. Default today.
+              summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery, the sleep
+                                that ended that morning, and weight and body composition. Default today.
               sleep [date]      The night that ended on that morning. Default last night.
-              capture <folder>  Save Garmin's raw replies (about 10 requests, once each) to files in a new
+              capture <folder>  Save Garmin's raw replies (about 13 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
 
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
@@ -173,7 +181,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             case "summary" -> {
                 arguments(line, 0, 1);
                 LocalDate date = date(line);
-                yield () -> new DataPrinter(io.out()).summary(data.dailySummary(date == null ? data.today() : date));
+                yield () -> summary(data, date);
             }
             case "sleep" -> {
                 arguments(line, 0, 1);
@@ -233,6 +241,30 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         LocalDate from = to.minusDays(days - 1);
         List<ActivitySummary> found = data.activities(from, to, type);
         new DataPrinter(io.out()).activities(found, from, to, type);
+    }
+
+    /**
+     * The day's totals, the night that ended that morning, and the day's weigh-ins. No date means today.
+     * The totals come first and any error in them stops the command, as before. If the sleep or weigh-ins can't be
+     * read (a reply we don't understand, or a 404), they are left out with a line on stderr, so the totals still
+     * show. Other errors (not logged in, 403, 429, no connection) still stop it.
+     */
+    private void summary(GarminClient data, LocalDate date) {
+        LocalDate day = date == null ? data.today() : date;
+        DailySummary totals = data.dailySummary(day);
+        Optional<Sleep> sleep = part("sleep", () -> data.sleep(day)).orElse(Optional.empty());
+        List<WeighIn> weighIns = part("weight", () -> data.weighIns(day)).orElse(List.of());
+        new DataPrinter(io.out()).summary(totals, sleep, weighIns);
+    }
+
+    /** One part of the summary, or empty (with a line on stderr) if Garmin's reply for it can't be read. */
+    private <T> Optional<T> part(String name, Supplier<T> fetch) {
+        try {
+            return Optional.of(fetch.get());
+        } catch (UnexpectedReplyException | NotFoundException e) {
+            io.err().println("Left out " + name + ": " + e.getMessage());
+            return Optional.empty();
+        }
     }
 
     /** No date means last night: the night that ended this morning. */

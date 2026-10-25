@@ -26,7 +26,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Reads my Garmin data: activities, one activity's details, daily summaries and sleep.
+ * Reads my Garmin data: activities, one activity's details, daily summaries, sleep and weigh-ins.
  * Reads {@link GarminCache} first, and calls Garmin through {@link GarminApi} only when there's no fresh copy,
  * so it never sees a token. Lifetimes are in {@link CacheLifetimes}. Errors are never cached.
  * <p>
@@ -228,6 +228,17 @@ public class GarminClient {
                         config.sleepBufferParam(), String.valueOf(config.sleepBufferMinutes()))),
                 body -> GarminReplies.sleep(parse(body, what), date, what),
                 night -> dayLifetime(date, me, night.isEmpty()));
+    }
+
+    /** The weigh-ins recorded on {@code date}, oldest first. Empty if there were none. */
+    public List<WeighIn> weighIns(LocalDate date) {
+        String what = "the weigh-ins for " + date;
+        Me me = me();
+        String path = GarminDataConfig.fill(config.weighInsPath(), date.toString());
+        return cached("weight-" + date, !skipCache,
+                () -> api.get(path, config.weighInsQuery()),
+                body -> GarminReplies.weighIns(parse(body, what), date, what),
+                found -> dayLifetime(date, me, found.isEmpty()));
     }
 
     /** Today's date in my Garmin profile's time zone, or the computer's if the profile has none. */

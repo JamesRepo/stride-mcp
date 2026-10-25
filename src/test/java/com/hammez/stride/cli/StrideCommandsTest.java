@@ -123,7 +123,9 @@ class StrideCommandsTest {
                     .respond("/activity-service/activity/1", 404, "")
                     .respond(daily, 200, "{}").respond(daily, 200, "{}")
                     .respond(sleep, 200, "{}").respond(sleep, Map.of("date", "2000-01-01", "nonSleepBufferMinutes", "60"),
-                            204, "");
+                            204, "")
+                    .respond("/weight-service/weight/dayview/2026-10-23", 200, "{\"dateWeightList\":[]}")
+                    .respond("/weight-service/weight/dayview/2000-01-01", 200, "{\"dateWeightList\":[]}");
             Clock clock = Clock.fixed(Instant.parse("2026-10-23T12:00:00Z"), ZoneOffset.UTC);
             var samples = new GarminSamples(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
                     GarminDataConfig.defaults(garmin.config()), json, clock, ZoneOffset.UTC);
@@ -133,9 +135,10 @@ class StrideCommandsTest {
         }
 
         assertThat(out()).contains(
-                "Saved 9 files to " + folder + ":",
+                "Saved 11 files to " + folder + ":",
                 "  activity-not-found.json      HTTP 404",
                 "  sleep-none.json              HTTP 204",
+                "  weight-none.json             HTTP 200",
                 "No activities in the last 7 days",
                 "These files hold personal data",
                 "docs/phases/phase-2-data.md (\"Getting real samples\")")

@@ -8,6 +8,7 @@ import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
 
@@ -137,6 +138,51 @@ final class GarminReplies {
                 decimal(dto, "averageSpO2Value")));
     }
 
+    /**
+     * One day's weigh-ins, oldest first, or none. They are in {@code dateWeightList}.
+     * <p>
+     * Seen 25 October 2026, on a day with none: a 200 with an empty {@code dateWeightList}. Not seen yet: one weigh-in.
+     * Its field names and units (masses in grams) follow python-garminconnect (October 2026); {@code totalAverage}
+     * in the real reply uses the same names.
+     */
+    static List<WeighIn> weighIns(JsonNode day, LocalDate date, String what) {
+        if (day.isMissingNode()) {
+            return List.of();
+        }
+        JsonNode list = day.path("dateWeightList");
+        if (!day.isObject() || !(list.isArray() || list.isMissingNode() || list.isNull())) {
+            throw new UnexpectedReplyException(what);
+        }
+        var weighIns = new ArrayList<Listed>();
+        for (JsonNode entry : list) {
+            if (!entry.isObject()) {
+                throw new UnexpectedReplyException(what);
+            }
+            // Garmin's own order isn't known, so sort by time: the exact moment, or else the time on the clock
+            // ("date", epoch milliseconds), which orders one day's weigh-ins just as well.
+            Instant time = epochMillis(entry, "timestampGMT");
+            Instant order = time != null ? time : epochMillis(entry, "date");
+            weighIns.add(new Listed(order, new WeighIn(
+                    date,
+                    time,
+                    kilograms(entry, "weight"),
+                    decimal(entry, "bmi"),
+                    decimalPercent(entry, "bodyFat"),
+                    decimalPercent(entry, "bodyWater"),
+                    kilograms(entry, "muscleMass"),
+                    kilograms(entry, "boneMass"),
+                    whole(entry, "visceralFat"),
+                    whole(entry, "metabolicAge"))));
+        }
+        // A weigh-in with no time at all goes first, so the last one is the latest known.
+        weighIns.sort(Comparator.comparing(Listed::order, Comparator.nullsFirst(Comparator.naturalOrder())));
+        return weighIns.stream().map(Listed::weighIn).toList();
+    }
+
+    /** A weigh-in and what it is sorted by. */
+    private record Listed(Instant order, WeighIn weighIn) {
+    }
+
     private static ActivitySummary summary(JsonNode ids, JsonNode type, JsonNode totals, String what) {
         JsonNode id = ids.path("activityId");
         if (!id.isIntegralNumber()) {
@@ -206,10 +252,24 @@ final class GarminReplies {
         return value == null ? null : (int) Math.round(value);
     }
 
-    /** A 0–100 value. Anything outside that range is taken as "no data". */
+    /** A 0–100 value, rounded. Anything outside that range is taken as "no data". */
     private static Integer percent(JsonNode node, String field) {
-        Integer value = whole(node, field);
+        return whole(decimalPercent(node, field));
+    }
+
+    /** A 0–100 value with decimals. Anything outside that range is taken as "no data". */
+    private static Double decimalPercent(JsonNode node, String field) {
+        Double value = decimal(node, field);
         return value == null || value < 0 || value > 100 ? null : value;
+    }
+
+    /**
+     * Garmin sends weights in grams (python-garminconnect, October 2026). Not yet confirmed with a real weigh-in:
+     * see docs/phases/phase-2-data.md.
+     */
+    private static Double kilograms(JsonNode node, String field) {
+        Double grams = decimal(node, field);
+        return grams == null ? null : grams / 1000;
     }
 
     private static String text(JsonNode node, String field) {

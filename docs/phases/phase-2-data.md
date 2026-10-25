@@ -14,7 +14,7 @@ Same jar and same style as phase 1. These are for testing. In phase 3 the same c
 |---|---|
 | `stride-mcp activities [--days N] [--type T]` | My activities from the last N days (default 7, at most 90), newest first. `--type running` keeps only runs. |
 | `stride-mcp activity <id>` | One activity: totals, heart rate, training effect, and each lap. The id is in the `activities` list. |
-| `stride-mcp summary [YYYY-MM-DD]` | One day's totals: steps, calories, heart rate, stress, Body Battery. Default today. |
+| `stride-mcp summary [YYYY-MM-DD]` | One day's totals: steps, calories, heart rate, stress, Body Battery. Also the sleep that ended that morning, and the day's weight and body composition (added 25 October 2026). Default today. |
 | `stride-mcp sleep [YYYY-MM-DD]` | The night that **ended** on that morning: times, stages, score. Default last night. |
 | `stride-mcp capture <folder>` | Saves Garmin's raw replies to files, for building test fixtures. See [Getting real samples](#getting-real-samples). |
 
@@ -69,9 +69,18 @@ Stress           average 20 (0–100)
 Body Battery     lowest 30, highest 96
 Intensity        0 min moderate, 2 min vigorous
 Floors climbed   7
+Sleep            8:52:00, score 91 (Excellent)
+Weight           75.4 kg (latest of 2 weigh-ins)
+  BMI            23.3
+  Body fat       18.6%
+  Body water     55.1%
+  Muscle mass    33.1 kg (44% of weight)
+  Bone mass      3.2 kg
 ```
 
 A day with no data at all prints `No data recorded for Sat 24 Oct 2026.` Floors are rounded down, because Garmin counts part floors.
+
+See [Sleep and weight in the summary](#sleep-and-weight-in-the-summary-added-25-october-2026) for the last two parts. The weigh-ins above are made up: no real one has been captured yet.
 
 ```
 $ stride-mcp sleep 2026-10-23
@@ -121,6 +130,7 @@ All of these are `GET` requests to `https://connectapi.garmin.com`, with the sam
 | **Its laps** | `/activity-service/activity/{activityId}/splits` | | Laps are in `lapDTOs`. |
 | **Daily summary** | `/usersummary-service/usersummary/daily/{displayName}` | `calendarDate` (YYYY-MM-DD) | `privacyProtected: true` means Garmin refused. |
 | **Sleep** | `/wellness-service/wellness/dailySleepData/{displayName}` | `date` (YYYY-MM-DD), `nonSleepBufferMinutes=60` | Main data in `dailySleepDTO`. |
+| **Weigh-ins** | `/weight-service/weight/dayview/{date}` | `includeAll=true` | Added 25 October 2026. One day's weigh-ins in `dateWeightList`. Masses in grams (to confirm with a real weigh-in). |
 
 What python-garminconnect does that we copy (as behaviour, not code):
 
@@ -318,6 +328,18 @@ record Sleep(
         String quality,                  // Garmin's label: "EXCELLENT", "GOOD", "FAIR", "POOR"
         Double averageRespirationBreathsPerMinute,
         Double averageSpo2Percent) {}
+
+record WeighIn(                          // added 25 October 2026
+        LocalDate date,
+        Instant time,
+        Double weightKilograms,
+        Double bmi,
+        Double bodyFatPercent,           // 0–100
+        Double bodyWaterPercent,         // 0–100
+        Double muscleMassKilograms,      // Garmin sends a mass, not a percentage
+        Double boneMassKilograms,
+        Integer visceralFat,             // Garmin's rating, not a mass
+        Integer metabolicAgeYears) {}
 ```
 
 | Method on `GarminClient` | Returns |
@@ -326,6 +348,7 @@ record Sleep(
 | `activity(long id)` | `ActivityDetails`. `NotFoundException` if there's no such activity. |
 | `dailySummary(LocalDate date)` | `DailySummary`. Fields are null for a day with no data. |
 | `sleep(LocalDate date)` | `Optional<Sleep>`, empty if no sleep was recorded that night |
+| `weighIns(LocalDate date)` | `List<WeighIn>`, oldest first, empty if none that day |
 | `today()` | Today's date in my Garmin time zone |
 
 `summary` includes the day's step total because it's in the same reply. Detailed step data is out of scope.
@@ -358,8 +381,8 @@ A CLI run is one short process, so a memory-only cache would be empty each time.
 | One activity, and its laps | 7 days | Finished activities rarely change (renaming is the usual edit) |
 | Activity list, range ends before yesterday | 1 day | Late uploads and edits are possible but rare |
 | Activity list, range includes today or yesterday | 10 minutes | A new activity can sync at any time |
-| Daily summary or sleep, today or yesterday | 15 minutes | Still changing as the watch syncs |
-| Daily summary or sleep, older days | 30 days | Finished |
+| Daily summary, sleep or weigh-ins, today or yesterday | 15 minutes | Still changing as the watch or scale syncs |
+| Daily summary, sleep or weigh-ins, older days | 30 days | Finished |
 | An empty reply for an older day | 1 hour | A watch might sync old data late |
 | Errors | Never cached | |
 
@@ -387,7 +410,7 @@ The class is `GarminCache` in `com.hammez.stride.garmin`. It never sees tokens: 
 
 | Detail | Choice |
 |---|---|
-| File names | `social-profile.json`, `personal-information.json`, `activity-<id>.json` and `activity-<id>-splits.json`, `summary-<date>.json`, `sleep-<date>.json`, `activities-<from>-to-<to>[-<type>]-page-<n>.json` |
+| File names | `social-profile.json`, `personal-information.json`, `activity-<id>.json` and `activity-<id>-splits.json`, `summary-<date>.json`, `sleep-<date>.json`, `weight-<date>.json`, `activities-<from>-to-<to>[-<type>]-page-<n>.json` |
 | What a file holds | `{"savedAt": …, "expiresAt": …, "body": "<Garmin's reply, as text>"}`. An empty reply (204) is `""`. |
 | When the lifetime is decided | When the reply is saved. So a day saved while it was "yesterday" lasts 15 minutes, even once it's older. |
 | "Empty" | No sleep that night, a summary with every value null, or an activity list with none in it |
@@ -415,7 +438,7 @@ I (the agent) mustn't call Garmin with the owner's tokens. So the owner runs one
 java -jar target/stride-mcp.jar capture ~/stride-samples
 ```
 
-It makes about 10 calls, once each, with the cache turned off:
+It makes about 13 calls, once each, with the cache turned off:
 
 | File | Request |
 |---|---|
@@ -427,6 +450,7 @@ It makes about 10 calls, once each, with the cache turned off:
 | `activity-not-found.json` | Activity id `1` (should be 404) |
 | `summary-today.json`, `summary-past.json` | Today, and 30 days ago |
 | `sleep-last-night.json`, `sleep-none.json` | Last night, and 1 January 2000 (should have no sleep) |
+| `weight-today.json`, `weight-none.json` | Today's weigh-ins, and 1 January 2000 (should have none). Added 25 October 2026. Weigh yourself before running capture, or `weight-today.json` will be empty too. |
 
 Each file holds the status code and the reply body, never headers, never tokens:
 
@@ -464,6 +488,7 @@ At the end it prints each file with its status, the date it used for today, and 
 | Places | `startLatitude`, `startLongitude`, `endLatitude`, `endLongitude`, `locationName`, any polyline |
 | Pictures | anything ending `ImageUrl…` |
 | Devices | `deviceId`, serial numbers |
+| Body stats | `weight`, `bmi`, `bodyFat`, `muscleMass`… in `weight-*.json`, if you'd rather not share them |
 | Anything else that looks personal | birth date, email, activity names you'd rather not share |
 
 I then turn them into fixtures under `src/test/resources/garmin/`, plus made-up variants (missing fields, odd values) for the failure tests.
@@ -539,7 +564,7 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 ## Not in phase 2
 
 - The MCP server and tools (phase 3)
-- Steps detail, weight and body composition, HRV, training status, stress and Body Battery detail (phase 4)
+- Steps detail, HRV, training status, stress and Body Battery detail (phase 4). Weight and body composition were added to `summary` on 25 October 2026; a weight history is still phase 4.
 - Writing anything to Garmin
 - GPS tracks, charts, second-by-second data, FIT/GPX downloads
 - Retries, or spreading out requests (phase 4)
@@ -555,6 +580,36 @@ Against `FakeGarmin`, extended to match query strings and to serve fixture files
 | Samples | A `capture` command, built before the parsing, so fixtures come from real replies |
 | Activity details | Summary plus laps (2 calls). No GPS or charts. |
 | Cache | Raw replies on disk, lifetimes as in the table above |
+
+## Sleep and weight in the summary (added 25 October 2026)
+
+The owner asked for `summary` to show the day's sleep and weight too. It now makes three requests instead of one, each cached on its own, as in the table above.
+
+| Part | Comes from | Shows |
+|---|---|---|
+| Sleep | The same call as `sleep`: the night that **ended** that morning | Time asleep and the score. `sleep` has the full detail. |
+| Weight | `weighIns(date)`: that day's weigh-ins only | The latest weight that day, and the latest body composition (BMI, body fat %, body water %, muscle mass, bone mass, visceral fat, metabolic age) when a scale sent it |
+
+| Decision | Why |
+|---|---|
+| Only that day's weigh-ins, not the latest before it | `summary` is about one day. A day without a weigh-in shows no weight. |
+| Muscle mass in kg, with its % of the weight worked out from the same weigh-in | Garmin sends a mass, not a percentage |
+| Weight and body composition can come from different weigh-ins | A morning scale reading followed by a weight typed in later shouldn't hide the body fat. The weight line then says "body composition from another weigh-in". |
+| Weigh-ins sorted by `timestampGMT`, or by `date` (the clock time) if that's missing | Garmin's own order isn't known |
+| If the sleep or weigh-ins can't be read (a reply we don't understand, or a 404), they are left out with a line on stderr (`Left out weight: …`), and the command still succeeds | The totals worked before; a new, unconfirmed reply shouldn't hide them. Not logged in, 403, 429 and no connection still stop the command, as everywhere. |
+| No parallel requests | Three requests one after another is fine for a command, and gentler on Garmin. The cache answers repeats. (Decided 25 October 2026, after a code review suggested it.) |
+| A missing part is left out, like any other line | A plain scale sends only the weight; some nights have no sleep |
+| `DailySummary` is unchanged | The three calls stay separate, so phase 3's tools can use them separately |
+
+**What the capture showed (25 October 2026).** The owner hadn't weighed in that day, so both weigh-in replies were empty days:
+
+| Finding | |
+|---|---|
+| A day with no weigh-ins | **200, not 204**, with `"dateWeightList": []`. Now the `weight-none.json` fixture. |
+| Top-level keys | `startDate`, `endDate`, `dateWeightList`, `totalAverage` |
+| `totalAverage` keys | `weight`, `bmi`, `bodyFat`, `bodyWater`, `boneMass`, `muscleMass`, `physiqueRating`, `visceralFat`, `metabolicAge` (all null), plus `from` and `until` (epoch milliseconds) |
+
+**Still to confirm:** the fields of one weigh-in in `dateWeightList` (`timestampGMT`, and the same names as `totalAverage`) and that masses are in grams. They follow python-garminconnect, and `totalAverage` uses the same names, but no day with a weigh-in has been captured. The tests use a made-up one (`Fixtures.TWO_WEIGH_INS`). To confirm: weigh in, run `capture` into a new folder, and send a stripped `weight-today.json`.
 
 ## Credit
 

@@ -43,10 +43,13 @@ public class GarminSamples {
     static final String SUMMARY_PAST = "summary-past.json";
     static final String SLEEP_LAST_NIGHT = "sleep-last-night.json";
     static final String SLEEP_NONE = "sleep-none.json";
+    static final String WEIGHT_TODAY = "weight-today.json";
+    static final String WEIGHT_NONE = "weight-none.json";
 
     /** Every file capture can write, in the order it writes them. */
     static final List<String> FILES = List.of(SOCIAL_PROFILE, PERSONAL_INFORMATION, ACTIVITIES, ACTIVITIES_EMPTY,
-            ACTIVITY, ACTIVITY_SPLITS, ACTIVITY_NOT_FOUND, SUMMARY_TODAY, SUMMARY_PAST, SLEEP_LAST_NIGHT, SLEEP_NONE);
+            ACTIVITY, ACTIVITY_SPLITS, ACTIVITY_NOT_FOUND, SUMMARY_TODAY, SUMMARY_PAST, SLEEP_LAST_NIGHT, SLEEP_NONE,
+            WEIGHT_TODAY, WEIGHT_NONE);
 
     /** A day long before Garmin Connect existed, so it should have no data. */
     private static final LocalDate EMPTY_DAY = LocalDate.of(2000, 1, 1);
@@ -207,6 +210,10 @@ public class GarminSamples {
             String sleepPath = GarminDataConfig.fill(config.sleepPath(), displayName);
             fetch(SLEEP_LAST_NIGHT, sleepPath, sleepQuery(today));
             fetch(SLEEP_NONE, sleepPath, sleepQuery(EMPTY_DAY));
+
+            fetch(WEIGHT_TODAY, GarminDataConfig.fill(config.weighInsPath(), today.toString()), config.weighInsQuery());
+            fetch(WEIGHT_NONE, GarminDataConfig.fill(config.weighInsPath(), EMPTY_DAY.toString()),
+                    config.weighInsQuery());
         }
 
         /** Today in the Garmin profile's time zone, or the computer's if the profile has none we can read. */

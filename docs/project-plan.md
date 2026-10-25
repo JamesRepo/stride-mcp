@@ -49,7 +49,7 @@ Detailed plan: [Phase 3](phases/phase-3-mcp.md)
 ### Phase 4: Make it reliable
 - Clear error messages, especially "please log in again"
 - Retries, rate limiting and tests
-- More tools: steps, weight and body composition, training status, HRV
+- More tools: steps, weight and body composition history, training status, HRV. (The CLI `summary` shows the day's weight and body composition since 25 October 2026.)
 
 ### Phase 5: Hosted online (needed for ChatGPT)
 - Streamable HTTP transport

@@ -17,6 +17,7 @@ import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.Lap;
 import com.hammez.stride.garmin.Sleep;
+import com.hammez.stride.garmin.WeighIn;
 
 /**
  * Prints Garmin data for a terminal, in metric units: km with 2 decimals, h:mm:ss or m:ss, min:ss /km.
@@ -121,8 +122,13 @@ final class DataPrinter {
         table(List.of("Lap", "Distance", "Time", "Pace", "Avg HR", "Max HR", "Elevation"), rows, Set.of(1));
     }
 
-    /** One day's totals, or a line saying there are none. */
-    void summary(DailySummary day) {
+    /**
+     * One day's totals, the night that ended that morning, and the day's latest weight and body composition.
+     * Or a line saying there is none of these.
+     *
+     * @param weighIns oldest first
+     */
+    void summary(DailySummary day, Optional<Sleep> sleep, List<WeighIn> weighIns) {
         var lines = new Lines();
         lines.add("Steps", day.steps() == null ? null
                 : format("%,d", day.steps()) + (day.stepGoal() == null ? "" : format(" (goal %,d)", day.stepGoal())));
@@ -146,6 +152,10 @@ final class DataPrinter {
         // Garmin counts part floors. Only whole ones were climbed.
         lines.add("Floors climbed", day.floorsClimbed() == null ? null
                 : String.valueOf((long) Math.floor(day.floorsClimbed())));
+        sleep.ifPresent(night -> lines.add("Sleep", joined(", ",
+                hours(night.sleepSeconds()),
+                score(night) == null ? null : "score " + score(night))));
+        weighIns(lines, weighIns);
         if (lines.isEmpty()) {
             out.println("No data recorded for " + DATE.format(day.date()) + ".");
             return;
@@ -175,13 +185,67 @@ final class DataPrinter {
         lines.add("  Light", hours(sleep.lightSeconds()));
         lines.add("  REM", hours(sleep.remSeconds()));
         lines.add("Awake", hours(sleep.awakeSeconds()));
-        lines.add("Score", sleep.score() == null ? label(sleep.quality())
-                : sleep.score() + (sleep.quality() == null ? "" : " (" + label(sleep.quality()) + ")"));
+        lines.add("Score", score(sleep));
         lines.add("Respiration", sleep.averageRespirationBreathsPerMinute() == null ? null
                 : format("%.0f breaths/min", sleep.averageRespirationBreathsPerMinute()));
         lines.add("SpO2", sleep.averageSpo2Percent() == null ? null
                 : format("%.0f%% average", sleep.averageSpo2Percent()));
         lines.print();
+    }
+
+    /** "91 (Excellent)", or just one of them. */
+    private static String score(Sleep sleep) {
+        return sleep.score() == null ? label(sleep.quality())
+                : sleep.score() + (sleep.quality() == null ? "" : " (" + label(sleep.quality()) + ")");
+    }
+
+    /**
+     * The day's latest weight, with the latest body composition under it. These can come from different weigh-ins:
+     * a scale in the morning (with body fat and so on) and a weight typed in later. If so, the weight line says so.
+     * Garmin gives muscle mass as a mass, so its share of the weight is worked out, from the same weigh-in.
+     *
+     * @param weighIns oldest first
+     */
+    private static void weighIns(Lines lines, List<WeighIn> weighIns) {
+        WeighIn weight = null;
+        WeighIn body = null;
+        for (WeighIn w : weighIns) {
+            if (w.weightKilograms() != null) {
+                weight = w;
+            }
+            if (hasBodyComposition(w)) {
+                body = w;
+            }
+        }
+        if (weight == null && body == null) {
+            return;
+        }
+        String notes = joined("; ",
+                weighIns.size() == 1 ? null : "latest of " + weighIns.size() + " weigh-ins",
+                weight == null || body == null || body == weight ? null : "body composition from another weigh-in");
+        lines.add("Weight", (weight == null ? "not recorded" : kilograms(weight.weightKilograms()))
+                + (notes == null ? "" : " (" + notes + ")"));
+        if (body != null) {
+            bodyComposition(lines, body);
+        }
+    }
+
+    private static boolean hasBodyComposition(WeighIn w) {
+        return w.bmi() != null || w.bodyFatPercent() != null || w.bodyWaterPercent() != null
+                || w.muscleMassKilograms() != null || w.boneMassKilograms() != null || w.visceralFat() != null
+                || w.metabolicAgeYears() != null;
+    }
+
+    private static void bodyComposition(Lines lines, WeighIn w) {
+        lines.add("  BMI", w.bmi() == null ? null : format("%.1f", w.bmi()));
+        lines.add("  Body fat", w.bodyFatPercent() == null ? null : format("%.1f%%", w.bodyFatPercent()));
+        lines.add("  Body water", w.bodyWaterPercent() == null ? null : format("%.1f%%", w.bodyWaterPercent()));
+        lines.add("  Muscle mass", w.muscleMassKilograms() == null ? null
+                : kilograms(w.muscleMassKilograms()) + (positive(w.weightKilograms()) == null ? ""
+                        : format(" (%.0f%% of weight)", 100 * w.muscleMassKilograms() / w.weightKilograms())));
+        lines.add("  Bone mass", w.boneMassKilograms() == null ? null : kilograms(w.boneMassKilograms()));
+        lines.add("  Visceral fat", w.visceralFat() == null ? null : String.valueOf(w.visceralFat()));
+        lines.add("  Metabolic age", w.metabolicAgeYears() == null ? null : w.metabolicAgeYears() + " years");
     }
 
     /** "Label  value" lines, lined up. A null value leaves its line out. */
@@ -234,6 +298,10 @@ final class DataPrinter {
 
     static String metres(double metres) {
         return format("%.0f m", metres);
+    }
+
+    static String kilograms(double kilograms) {
+        return format("%.1f kg", kilograms);
     }
 
     /** h:mm:ss, or m:ss under an hour. */

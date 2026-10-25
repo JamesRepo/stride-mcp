@@ -49,6 +49,7 @@ class DataCommandsTest {
     private static final String SPLITS = "/activity-service/activity/24816092240/splits";
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
+    private static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
 
     @TempDir
     Path temp;
@@ -224,12 +225,16 @@ class DataCommandsTest {
     // summary
 
     @Test
-    void summaryFromTheRealReply() {
+    void summaryWithTheNightsSleepAndTheLatestWeighIn() {
         signedIn();
-        garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-23"), 200, Fixtures.read("summary-today.json"));
+        garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-23"), 200, Fixtures.read("summary-today.json"))
+                .respond(SLEEP, Map.of("date", "2026-10-23", "nonSleepBufferMinutes", "60"), 200,
+                        Fixtures.read("sleep-last-night.json"))
+                .respond(WEIGHT_PATH + "2026-10-23", Map.of("includeAll", "true"), 200, Fixtures.TWO_WEIGH_INS);
 
         assertThat(run("summary", "2026-10-23")).isZero();
 
+        // Garmin gives muscle mass as a mass: its share of the weight is worked out.
         assertThat(out()).isEqualTo("""
                 Fri 23 Oct 2026
                 Steps            3,532 (goal 11,190)
@@ -240,13 +245,126 @@ class DataCommandsTest {
                 Body Battery     lowest 30, highest 96
                 Intensity        0 min moderate, 2 min vigorous
                 Floors climbed   7
+                Sleep            8:52:00, score 91 (Excellent)
+                Weight           75.4 kg (latest of 2 weigh-ins)
+                  BMI            23.3
+                  Body fat       18.6%
+                  Body water     55.1%
+                  Muscle mass    33.1 kg (44% of weight)
+                  Bone mass      3.2 kg
+                """);
+    }
+
+    @Test
+    void summaryWithoutSleepOrAWeighInLeavesThemOut() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{\"totalSteps\":3532}")
+                .respond(SLEEP, 200, Fixtures.read("sleep-none.json"))
+                .respond(WEIGHT_PATH + "2026-10-23", 200, Fixtures.read("weight-none.json"));
+
+        assertThat(run("summary", "2026-10-23")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Fri 23 Oct 2026
+                Steps            3,532
+                """);
+    }
+
+    @Test
+    void summaryOfAWeighInFromAPlainScale() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{}")
+                .respond(SLEEP, 204, "")
+                .respond(WEIGHT_PATH + "2026-10-23", 200, "{\"dateWeightList\":[{\"weight\":68250.0,\"bmi\":null}]}");
+
+        assertThat(run("summary", "2026-10-23")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Fri 23 Oct 2026
+                Weight           68.3 kg
+                """);
+    }
+
+    @Test
+    void summaryKeepsTheTotalsWhenSleepOrWeightCantBeRead() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{\"totalSteps\":3532}")
+                .respond(SLEEP, 404, "")
+                .respond(WEIGHT_PATH + "2026-10-23", 200, "{\"dateWeightList\":\"none\"}");
+
+        assertThat(run("summary", "2026-10-23")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Fri 23 Oct 2026
+                Steps            3,532
+                """);
+        List<String> lines = err().lines().toList();
+        assertThat(lines).hasSize(2);
+        assertThat(lines.get(0)).startsWith("Left out sleep: Garmin has nothing at ");
+        assertThat(lines.get(1)).isEqualTo("Left out weight: Garmin's reply for the weigh-ins for 2026-10-23 wasn't "
+                + "what stride-mcp expected. Garmin may have changed it. Check for an update to stride-mcp.");
+    }
+
+    @Test
+    void summaryStopsOnRateLimitingEvenInTheWeightCall() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{\"totalSteps\":3532}")
+                .respond(SLEEP, 204, "")
+                .respond(WEIGHT_PATH + "2026-10-23", 429, "");
+
+        assertThat(run("summary", "2026-10-23")).isEqualTo(1);
+
+        assertThat(out()).isEmpty();
+        assertThat(err()).startsWith("Garmin is rate limiting.");
+    }
+
+    @Test
+    void summaryTakesTheWeightAndBodyCompositionFromTheirLatestWeighIns() {
+        signedIn();
+        // A smart scale in the morning, then a weight typed in at night.
+        garmin.respond(SUMMARY, 200, "{}")
+                .respond(SLEEP, 204, "")
+                .respond(WEIGHT_PATH + "2026-10-23", 200, """
+                        {"dateWeightList":[
+                         {"weight":75900.0,"timestampGMT":1792785600000,"sourceType":"MANUAL"},
+                         {"weight":75400.0,"bodyFat":18.6,"muscleMass":33100.0,"timestampGMT":1792737900000}]}""");
+
+        assertThat(run("summary", "2026-10-23")).isZero();
+
+        // Muscle's share is of the weight measured with it.
+        assertThat(out()).isEqualTo("""
+                Fri 23 Oct 2026
+                Weight           75.9 kg (latest of 2 weigh-ins; body composition from another weigh-in)
+                  Body fat       18.6%
+                  Muscle mass    33.1 kg (44% of weight)
+                """);
+    }
+
+    @Test
+    void summaryOfBodyCompositionWithoutAWeightAndASleepWithOnlyAQualityLabel() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{}")
+                .respond(SLEEP, 200, """
+                        {"dailySleepDTO":{"sleepTimeSeconds":27000,"sleepScores":{"overall":{"qualifierKey":"GOOD"}}}}""")
+                .respond(WEIGHT_PATH + "2026-10-23", 200, "{\"dateWeightList\":[{\"bodyFat\":18.6}]}");
+
+        assertThat(run("summary", "2026-10-23")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Fri 23 Oct 2026
+                Sleep            7:30:00, score Good
+                Weight           not recorded
+                  Body fat       18.6%
                 """);
     }
 
     @Test
     void summaryDefaultsToTodayInTheProfilesTimeZone() {
         signedIn();
-        garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-24"), 200, "{\"totalSteps\":null}");
+        garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-24"), 200, "{\"totalSteps\":null}")
+                .respond(SLEEP, Map.of("date", "2026-10-24", "nonSleepBufferMinutes", "60"), 200,
+                        Fixtures.read("sleep-none.json"))
+                .respond(WEIGHT_PATH + "2026-10-24", 200, Fixtures.read("weight-none.json"));
 
         assertThat(run("summary")).isZero();
 
@@ -300,6 +418,8 @@ class DataCommandsTest {
                 .respond(ACTIVITY, 200, Fixtures.read("activity.json"))
                 .respond(SPLITS, 200, Fixtures.read("activity-splits.json"))
                 .respond(SUMMARY, 200, Fixtures.read("summary-past.json"))
+                .respond(SLEEP, 204, "")
+                .respond(WEIGHT_PATH + "2026-09-23", 200, Fixtures.TWO_WEIGH_INS)
                 .respond(SLEEP, 200, Fixtures.read("sleep-last-night.json"));
         List<List<String>> commands = List.of(List.of("activities"), List.of("activity", "24816092240"),
                 List.of("summary", "2026-09-23"), List.of("sleep", "2026-10-23"));
@@ -315,15 +435,20 @@ class DataCommandsTest {
             out.reset();
         }
 
-        for (String path : List.of(PROFILE_PATH, PERSONAL, ACTIVITIES, ACTIVITY, SPLITS, SUMMARY, SLEEP)) {
+        for (String path : List.of(PROFILE_PATH, PERSONAL, ACTIVITIES, ACTIVITY, SPLITS, SUMMARY,
+                WEIGHT_PATH + "2026-09-23")) {
             assertThat(garmin.requests(path)).as(path).hasSize(1);
         }
+        // Once for summary's night, once for sleep's.
+        assertThat(garmin.requests(SLEEP)).hasSize(2);
     }
 
     @Test
     void noCacheAsksGarminEvenWithAFreshCopyAndStillCachesTheReply() {
         signedIn();
-        garmin.respond(SUMMARY, 200, "{\"totalSteps\":100}").respond(SUMMARY, 200, "{\"totalSteps\":200}");
+        garmin.respond(SUMMARY, 200, "{\"totalSteps\":100}").respond(SUMMARY, 200, "{\"totalSteps\":200}")
+                .respond(SLEEP, 204, "").respond(SLEEP, 204, "")
+                .respond(WEIGHT_PATH + "2026-10-22", 200, "{}").respond(WEIGHT_PATH + "2026-10-22", 200, "{}");
 
         assertThat(run("summary", "2026-10-22")).isZero();
         assertThat(run("summary", "--no-cache", "2026-10-22")).isZero();
@@ -331,6 +456,8 @@ class DataCommandsTest {
 
         assertThat(out()).containsSubsequence("Steps            100", "Steps            200", "Steps            200");
         assertThat(garmin.requests(SUMMARY)).hasSize(2);
+        assertThat(garmin.requests(SLEEP)).hasSize(2);
+        assertThat(garmin.requests(WEIGHT_PATH + "2026-10-22")).hasSize(2);
         // The profile still comes from the cache.
         assertThat(garmin.requests(PROFILE_PATH)).hasSize(1);
     }

@@ -97,7 +97,9 @@ class GarminSamplesTest {
                 new Saved("summary-today.json", 200),
                 new Saved("summary-past.json", 200),
                 new Saved("sleep-last-night.json", 200),
-                new Saved("sleep-none.json", 204));
+                new Saved("sleep-none.json", 204),
+                new Saved("weight-today.json", 200),
+                new Saved("weight-none.json", 200));
         assertThat(capture.notes()).containsExactly("Today is 2026-10-24 in Europe/London (from your Garmin profile).");
 
         assertThat(read("social-profile.json").path("body").path("displayName").asString()).isEqualTo("jo runner");
@@ -111,15 +113,19 @@ class GarminSamplesTest {
         assertThat(read("sleep-last-night.json").path("body").path("dailySleepDTO").isObject()).isTrue();
         assertThat(read("sleep-none.json").path("status").asInt()).isEqualTo(204);
         assertThat(read("sleep-none.json").path("body").asString()).isEmpty();
+        assertThat(read("weight-today.json").path("body").path("dateWeightList")).hasSize(1);
+        assertThat(read("weight-none.json").path("body").path("dateWeightList")).isEmpty();
 
         // Each request made once, in order, with no retries and no refresh.
         assertThat(garmin.requests()).extracting(FakeGarmin.Request::path).containsExactly(
                 PROFILE_PATH, PERSONAL, ACTIVITIES, ACTIVITIES, ACTIVITY, SPLITS, MISSING, SUMMARY, SUMMARY, SLEEP,
-                SLEEP);
+                SLEEP, weight("2026-10-24"), weight("2000-01-01"));
         assertThat(garmin.requests(ACTIVITIES)).extracting(FakeGarmin.Request::queryParams).containsExactly(
                 activitiesQuery("2026-10-18", "2026-10-24"), activitiesQuery("2000-01-01", "2000-01-07"));
         assertThat(garmin.requests(SLEEP)).extracting(FakeGarmin.Request::queryParams).containsExactly(
                 sleepQuery("2026-10-24"), sleepQuery("2000-01-01"));
+        assertThat(garmin.requests()).filteredOn(r -> r.path().startsWith("/weight-service/"))
+                .extracting(FakeGarmin.Request::queryParams).containsOnly(Map.of("includeAll", "true"));
     }
 
     @Test
@@ -152,7 +158,7 @@ class GarminSamplesTest {
         Capture capture = samples.capture(folder);
 
         assertThat(capture.saved()).extracting(Saved::file).doesNotContain("activity.json", "activity-splits.json")
-                .hasSize(9);
+                .hasSize(11);
         assertThat(capture.notes()).anySatisfy(note -> assertThat(note)
                 .startsWith("No activities in the last 7 days, so activity.json and activity-splits.json were skipped."));
         assertThat(read("activities.json").path("body")).isEmpty();
@@ -319,7 +325,7 @@ class GarminSamplesTest {
 
         assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(folder, LinkOption.NOFOLLOW_LINKS)))
                 .isEqualTo("rwx------");
-        assertThat(files()).hasSize(11).allSatisfy(file -> assertThat(PosixFilePermissions.toString(
+        assertThat(files()).hasSize(13).allSatisfy(file -> assertThat(PosixFilePermissions.toString(
                 Files.getPosixFilePermissions(folder.resolve(file), LinkOption.NOFOLLOW_LINKS))).isEqualTo("rw-------"));
     }
 
@@ -329,7 +335,7 @@ class GarminSamplesTest {
 
         Capture capture = samples.capture(folder);
 
-        assertThat(files()).hasSize(11).noneMatch(file -> file.endsWith(".tmp"));
+        assertThat(files()).hasSize(13).noneMatch(file -> file.endsWith(".tmp"));
         for (String file : files()) {
             assertThat(Files.readString(folder.resolve(file))).as(file)
                     .doesNotContain(ACCESS_TOKEN).doesNotContain(REFRESH_TOKEN).doesNotContain("Bearer")
@@ -378,7 +384,7 @@ class GarminSamplesTest {
         Files.writeString(folder.resolve("notes.txt"), "mine");
         queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
 
-        assertThat(samples.capture(folder).saved()).hasSize(11);
+        assertThat(samples.capture(folder).saved()).hasSize(13);
         assertThat(Files.readString(folder.resolve("notes.txt"))).isEqualTo("mine");
     }
 
@@ -396,7 +402,13 @@ class GarminSamplesTest {
                 .respond(SUMMARY, Map.of("calendarDate", today.toString()), 200,
                         "{\"calendarDate\":\"" + today + "\",\"totalSteps\":9012}")
                 .respond(SLEEP, sleepQuery("2000-01-01"), 204, "")
-                .respond(SLEEP, sleepQuery(today.toString()), 200, "{\"dailySleepDTO\":{\"sleepTimeSeconds\":27000}}");
+                .respond(SLEEP, sleepQuery(today.toString()), 200, "{\"dailySleepDTO\":{\"sleepTimeSeconds\":27000}}")
+                .respond(weight(today.toString()), 200, "{\"dateWeightList\":[{\"weight\":75400.0}]}")
+                .respond(weight("2000-01-01"), 200, "{\"dateWeightList\":[]}");
+    }
+
+    private static String weight(String date) {
+        return "/weight-service/weight/dayview/" + date;
     }
 
     private static Map<String, String> activitiesQuery(String from, String to) {

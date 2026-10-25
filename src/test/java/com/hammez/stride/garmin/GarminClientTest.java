@@ -45,6 +45,7 @@ class GarminClientTest {
     private static final String SPLITS = "/activity-service/activity/24816092240/splits";
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
+    private static final String WEIGHT = "/weight-service/weight/dayview/2026-10-23";
 
     @TempDir
     Path temp;
@@ -309,6 +310,73 @@ class GarminClientTest {
         for (int i = 0; i < 2; i++) {
             assertThat(catchThrowable(() -> client.sleep(OCT_23))).isExactlyInstanceOf(UnexpectedReplyException.class)
                     .hasMessageContaining("the sleep for the night ending 2026-10-23");
+        }
+    }
+
+    // Weigh-ins
+
+    @Test
+    void weighInsOldestFirstInKilograms() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT, Map.of("includeAll", "true"), 200, Fixtures.TWO_WEIGH_INS);
+
+        assertThat(client.weighIns(OCT_23)).containsExactly(
+                new WeighIn(OCT_23, Instant.ofEpochMilli(1792737600000L), 75.9, null, null, null, null, null, null,
+                        null),
+                new WeighIn(OCT_23, Instant.ofEpochMilli(1792737900000L), 75.4, 23.27, 18.6, 55.1, 33.1, 3.2, null,
+                        null));
+    }
+
+    @Test
+    void weighInsWithoutAnExactTimeAreSortedByTheClockTime() {
+        signedInAs("{}");
+        // "date" is the time on the clock, in epoch milliseconds: enough to order one day's weigh-ins.
+        garmin.respond(WEIGHT, 200, """
+                {"dateWeightList":[{"weight":75900.0,"date":1792760400000},{"weight":75400.0,"date":1792738800000},
+                 {"weight":76100.0}]}""");
+
+        List<WeighIn> weighIns = client.weighIns(OCT_23);
+
+        assertThat(weighIns).extracting(WeighIn::weightKilograms).containsExactly(76.1, 75.4, 75.9);
+        assertThat(weighIns).extracting(WeighIn::time).containsOnlyNulls();
+    }
+
+    @Test
+    void weighInValuesThatDontMakeSenseAreLeftOut() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT, 200, """
+                {"dateWeightList":[{"weight":"heavy","bodyFat":-1.0,"bodyWater":140.0,"visceralFat":6.0,
+                 "metabolicAge":34}]}""");
+
+        assertThat(client.weighIns(OCT_23)).containsExactly(
+                new WeighIn(OCT_23, null, null, null, null, null, null, null, 6, 34));
+    }
+
+    @Test
+    void noWeighInsIsEmpty() {
+        signedInAs("{}");
+        // Real: Garmin answers 200 with an empty dateWeightList and an all-null totalAverage.
+        garmin.respond(WEIGHT, 200, fixture("weight-none.json"))
+                .respond(WEIGHT, 204, "")
+                .respond(WEIGHT, 200, "{\"dateWeightList\":null}")
+                .respond(WEIGHT, 200, "{}");
+
+        for (int i = 0; i < 4; i++) {
+            assertThat(client.weighIns(OCT_23)).isEmpty();
+        }
+    }
+
+    @Test
+    void weighInsThatArentAListAreAnUnexpectedReply() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT, 200, "[]")
+                .respond(WEIGHT, 200, "{\"dateWeightList\":\"none\"}")
+                .respond(WEIGHT, 200, "{\"dateWeightList\":[75400]}");
+
+        for (int i = 0; i < 3; i++) {
+            assertThat(catchThrowable(() -> client.weighIns(OCT_23)))
+                    .isExactlyInstanceOf(UnexpectedReplyException.class)
+                    .hasMessageContaining("the weigh-ins for 2026-10-23");
         }
     }
 
