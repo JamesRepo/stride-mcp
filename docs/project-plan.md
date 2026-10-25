@@ -40,6 +40,7 @@ Detailed plan: [Phase 2](phases/phase-2-data.md)
 - **Done when:** a small command prints last week's runs.
 
 ### Phase 3: MCP server (stdio)
+Detailed plan: [Phase 3](phases/phase-3-mcp.md)
 - Add Spring AI's MCP server
 - First tools: `get_activities`, `get_activity`, `get_daily_summary`, `get_sleep`
 - Connect it to Claude Desktop or Claude Code
