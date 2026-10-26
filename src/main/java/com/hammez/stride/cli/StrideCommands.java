@@ -51,7 +51,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               login             Sign in to Garmin in your browser and save the session
               whoami            Show who you're signed in as (refreshes the session if needed)
               logout            Delete the saved session and the cache
-              activities        Your activities from the last 7 days, newest first
+              activities        Your activities from the last %d days, newest first
                 --days N          The last N days instead, today included (1 to %d)
                 --type T          Only this type, as Garmin names it: running, cycling, trail_running...
               activity <id>     One activity: totals, heart rate, training effect and laps. The id is in activities.
@@ -65,13 +65,12 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
             --no-cache            With activities, activity, summary or sleep: ask Garmin even if the cache
                                   has a fresh copy. The new reply is still cached.
-            """.formatted(GarminDataConfig.MAX_RANGE_DAYS);
+            """.formatted(GarminDataConfig.DEFAULT_RANGE_DAYS, GarminDataConfig.MAX_RANGE_DAYS);
 
     public static final String SERVE_ARGUMENTS =
             "serve takes no arguments or options, only Spring settings such as --stride.token-file=…";
 
     private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep");
-    private static final int DEFAULT_DAYS = 7;
 
     static final String CHECKLIST = "the checklist in docs/phases/phase-2-data.md (\"Getting real samples\")";
 
@@ -190,7 +189,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             }
             case "activities" -> {
                 arguments(line, 0, 0);
-                int days = line.days() == null ? DEFAULT_DAYS : line.days();
+                int days = line.days() == null ? GarminDataConfig.DEFAULT_RANGE_DAYS : line.days();
                 yield () -> activities(data, days, line.type());
             }
             case "activity" -> {

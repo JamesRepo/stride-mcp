@@ -222,11 +222,10 @@ public class GarminClient {
         String what = "the daily summary for " + date;
         Me me = me();
         String path = GarminDataConfig.fill(config.dailySummaryPath(), me.displayName());
-        DailySummary noData = GarminReplies.dailySummary(json.missingNode(), date, what);
         return cached("summary-" + date, !skipCache,
                 () -> api.get(path, Map.of(config.dailySummaryDateParam(), date.toString())),
                 body -> GarminReplies.dailySummary(parse(body, what), date, what),
-                day -> dayLifetime(date, me, day.equals(noData)));
+                day -> dayLifetime(date, me, day.isEmpty()));
     }
 
     /** The night that ended on the morning of {@code date}, or empty if no sleep was recorded. */

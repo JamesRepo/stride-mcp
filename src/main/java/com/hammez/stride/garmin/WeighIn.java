@@ -26,4 +26,10 @@ public record WeighIn(
         Double boneMassKilograms,
         Integer visceralFat,
         Integer metabolicAgeYears) {
+
+    /** True if it has any value besides the weight. */
+    public boolean hasBodyComposition() {
+        return bmi != null || bodyFatPercent != null || bodyWaterPercent != null || muscleMassKilograms != null
+                || boneMassKilograms != null || visceralFat != null || metabolicAgeYears != null;
+    }
 }

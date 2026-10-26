@@ -15,8 +15,10 @@ import java.util.Set;
 import com.hammez.stride.garmin.ActivityDetails;
 import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
+import com.hammez.stride.garmin.DayWeight;
 import com.hammez.stride.garmin.Lap;
 import com.hammez.stride.garmin.Sleep;
+import com.hammez.stride.garmin.Units;
 import com.hammez.stride.garmin.WeighIn;
 
 /**
@@ -200,40 +202,26 @@ final class DataPrinter {
     }
 
     /**
-     * The day's latest weight, with the latest body composition under it. These can come from different weigh-ins:
-     * a scale in the morning (with body fat and so on) and a weight typed in later. If so, the weight line says so.
-     * Garmin gives muscle mass as a mass, so its share of the weight is worked out, from the same weigh-in.
+     * The day's latest weight, with the latest body composition under it ({@link DayWeight}). If they come from
+     * different weigh-ins, the weight line says so. Garmin gives muscle mass as a mass, so its share of the weight
+     * is worked out, from the same weigh-in.
      *
      * @param weighIns oldest first
      */
     private static void weighIns(Lines lines, List<WeighIn> weighIns) {
-        WeighIn weight = null;
-        WeighIn body = null;
-        for (WeighIn w : weighIns) {
-            if (w.weightKilograms() != null) {
-                weight = w;
-            }
-            if (hasBodyComposition(w)) {
-                body = w;
-            }
-        }
-        if (weight == null && body == null) {
+        Optional<DayWeight> found = DayWeight.of(weighIns);
+        if (found.isEmpty()) {
             return;
         }
+        DayWeight day = found.get();
         String notes = joined("; ",
-                weighIns.size() == 1 ? null : "latest of " + weighIns.size() + " weigh-ins",
-                weight == null || body == null || body == weight ? null : "body composition from another weigh-in");
-        lines.add("Weight", (weight == null ? "not recorded" : kilograms(weight.weightKilograms()))
+                day.weighIns() == 1 ? null : "latest of " + day.weighIns() + " weigh-ins",
+                day.fromDifferentWeighIns() ? "body composition from another weigh-in" : null);
+        lines.add("Weight", (day.weight() == null ? "not recorded" : kilograms(day.weight().weightKilograms()))
                 + (notes == null ? "" : " (" + notes + ")"));
-        if (body != null) {
-            bodyComposition(lines, body);
+        if (day.bodyComposition() != null) {
+            bodyComposition(lines, day.bodyComposition());
         }
-    }
-
-    private static boolean hasBodyComposition(WeighIn w) {
-        return w.bmi() != null || w.bodyFatPercent() != null || w.bodyWaterPercent() != null
-                || w.muscleMassKilograms() != null || w.boneMassKilograms() != null || w.visceralFat() != null
-                || w.metabolicAgeYears() != null;
     }
 
     private static void bodyComposition(Lines lines, WeighIn w) {
@@ -304,38 +292,23 @@ final class DataPrinter {
         return format("%.1f kg", kilograms);
     }
 
-    /** h:mm:ss, or m:ss under an hour. */
+    /** h:mm:ss, or m:ss under an hour ({@link Units#duration}). "–" for none. */
     static String duration(Double seconds) {
-        if (seconds == null) {
-            return NONE;
-        }
-        long total = Math.round(seconds);
-        long h = total / 3600;
-        long m = total % 3600 / 60;
-        long s = total % 60;
-        return h > 0 ? format("%d:%02d:%02d", h, m, s) : format("%d:%02d", m, s);
+        return orNone(Units.duration(seconds));
     }
 
-    /** Always h:mm:ss, or null. */
+    /** Always h:mm:ss ({@link Units#hours}), or null. */
     static String hours(Integer seconds) {
-        if (seconds == null) {
-            return null;
-        }
-        return format("%d:%02d:%02d", seconds / 3600, seconds % 3600 / 60, seconds % 60);
+        return Units.hours(seconds);
     }
 
-    /** min:ss per km. "–" for no speed. */
+    /** min:ss per km ({@link Units#pace}). "–" for no speed. */
     static String pace(Double metresPerSecond) {
-        if (metresPerSecond == null || metresPerSecond <= 0) {
-            return NONE;
-        }
-        long secondsPerKm = Math.round(1000 / metresPerSecond);
-        return format("%d:%02d /km", secondsPerKm / 60, secondsPerKm % 60);
+        return orNone(Units.pace(metresPerSecond));
     }
 
-    /** Null for 0 or less: Garmin's way of saying "doesn't apply" for an activity's distance, speed or time. */
     private static Double positive(Double value) {
-        return value == null || value <= 0 ? null : value;
+        return Units.positive(value);
     }
 
     private static String heartRate(String... parts) {
@@ -358,13 +331,8 @@ final class DataPrinter {
         return instant == null ? null : DAY_TIME.format(instant.atZone(zone));
     }
 
-    /** Garmin's {@code EXCELLENT} as "Excellent". */
     private static String label(String key) {
-        if (key == null || key.isEmpty()) {
-            return null;
-        }
-        String words = key.replace('_', ' ').toLowerCase(Locale.ROOT);
-        return Character.toUpperCase(words.charAt(0)) + words.substring(1);
+        return Units.label(key);
     }
 
     private static String orNone(Object value) {

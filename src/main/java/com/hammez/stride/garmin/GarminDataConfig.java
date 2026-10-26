@@ -90,6 +90,12 @@ public record GarminDataConfig(
      */
     public static final int MAX_RANGE_DAYS = 90;
 
+    /**
+     * The date range, in days with today included, used when none is given: the CLI's {@code activities} without
+     * {@code --days}, and {@code get_activities} without {@code from} and {@code to}.
+     */
+    public static final int DEFAULT_RANGE_DAYS = 7;
+
     /** The query for {@code weighInsPath}: every weigh-in that day. The client and {@code capture} both send this. */
     public Map<String, String> weighInsQuery() {
         return Map.of(weighInsAllParam, "true");

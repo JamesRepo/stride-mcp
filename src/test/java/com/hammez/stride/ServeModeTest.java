@@ -29,7 +29,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * {@code serve} as an AI app runs it: a separate Java process, talked to over its stdin and stdout. Nothing here
- * talks to Garmin: there are no tools yet, and the token file doesn't exist.
+ * talks to Garmin: the token file doesn't exist, and the only tool calls are refused for their input.
  */
 class ServeModeTest {
 
@@ -73,7 +73,16 @@ class ServeModeTest {
         assertThat(result.path("capabilities").path("tools").path("listChanged").asBoolean()).isFalse();
 
         assertThat(toolsList.path("id").asInt()).isEqualTo(2);
-        assertThat(toolsList.path("result").path("tools").isArray()).isTrue();
+        // The four tools, read-only, each with a description (GarminToolsTest checks the wording).
+        JsonNode tools = toolsList.path("result").path("tools");
+        assertThat(tools.valueStream().map(tool -> tool.path("name").asString()))
+                .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep");
+        for (JsonNode tool : tools) {
+            assertThat(tool.path("description").asString()).as(tool.toString()).isNotBlank();
+            assertThat(tool.path("annotations").path("readOnlyHint").asBoolean()).as(tool.toString()).isTrue();
+            assertThat(tool.path("annotations").path("destructiveHint").asBoolean(true)).as(tool.toString())
+                    .isFalse();
+        }
 
         server.closeStdin();
         assertThat(server.exitCode()).isZero();
@@ -85,6 +94,37 @@ class ServeModeTest {
         assertThat(server.stdout()).hasSize(2);
         assertThat(server.stderr()).contains(NoisyStartup.PRINTED).doesNotContain(NoisyStartup.LOGGED);
         assertThat(Files.readString(logFile())).contains(NoisyStartup.LOGGED);
+    }
+
+    @Test
+    void badInputsAreToolErrorsAndOneLogLineEach() throws Exception {
+        // Not logged in (no token file), so anything that got past the input checks would fail differently.
+        var server = start("serve");
+        server.send(INITIALIZE);
+        server.reply();
+        server.send(INITIALIZED);
+
+        server.send("""
+                {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sleep",\
+                "arguments":{"date":"yesterday"}}}""");
+        JsonNode badDate = server.reply().path("result");
+        // A missing required input is refused by the MCP SDK, which checks arguments against the input schema
+        // before the tool runs, in its own words.
+        server.send("""
+                {"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"get_activity","arguments":{}}}""");
+        JsonNode noId = server.reply().path("result");
+        server.closeStdin();
+        assertThat(server.exitCode()).isZero();
+
+        assertThat(badDate.path("isError").asBoolean()).isTrue();
+        assertThat(badDate.path("content").get(0).path("text").asString())
+                .isEqualTo("`date` isn't a date. Dates look like 2026-10-22.");
+        assertThat(noId.path("isError").asBoolean()).isTrue();
+        assertThat(noId.path("content").get(0).path("text").asString())
+                .startsWith("Tool (get_activity) input validation failed:").contains("id");
+        String log = Files.readString(logFile());
+        assertThat(log).containsPattern("get_sleep refused its input in \\d+ ms");
+        assertThat(log).doesNotContain("yesterday");
     }
 
     @Test

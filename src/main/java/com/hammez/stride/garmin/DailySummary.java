@@ -26,4 +26,13 @@ public record DailySummary(
         Integer moderateIntensityMinutes,
         Integer vigorousIntensityMinutes,
         Double floorsClimbed) {
+
+    /** True for a day with no data: every value is null. Decides the cache lifetime and the tools' "recorded". */
+    public boolean isEmpty() {
+        return steps == null && stepGoal == null && distanceMetres == null && totalKilocalories == null
+                && activeKilocalories == null && restingHeartRateBpm == null && minHeartRateBpm == null
+                && maxHeartRateBpm == null && averageStressLevel == null && bodyBatteryHighest == null
+                && bodyBatteryLowest == null && moderateIntensityMinutes == null && vigorousIntensityMinutes == null
+                && floorsClimbed == null;
+    }
 }

@@ -14,7 +14,7 @@ import org.junit.jupiter.api.Test;
 
 import com.hammez.stride.garmin.ActivitySummary;
 
-/** The units, at their rounding edges, and the plan's example. DataCommandsTest covers the other layouts. */
+/** The plan's example, and the CLI's units. DataCommandsTest covers the other layouts. */
 class DataPrinterTest {
 
     @Test
@@ -48,28 +48,13 @@ class DataPrinterTest {
     }
 
     @Test
-    void durationsRoundToTheSecondAndShowHoursOnlyWhenThereAreSome() {
-        assertThat(DataPrinter.duration(59.4)).isEqualTo("0:59");
+    void missingValuesAreADash() {
+        // The rounding is UnitsTest's. Here: the CLI shows a missing value as "–".
         assertThat(DataPrinter.duration(59.6)).isEqualTo("1:00");
-        assertThat(DataPrinter.duration(3599.4)).isEqualTo("59:59");
-        assertThat(DataPrinter.duration(3599.6)).isEqualTo("1:00:00");
-        assertThat(DataPrinter.duration(36_005.0)).isEqualTo("10:00:05");
         assertThat(DataPrinter.duration(null)).isEqualTo("–");
-    }
-
-    @Test
-    void sleepDurationsAlwaysShowHours() {
-        assertThat(DataPrinter.hours(480)).isEqualTo("0:08:00");
-        assertThat(DataPrinter.hours(31_920)).isEqualTo("8:52:00");
-        assertThat(DataPrinter.hours(null)).isNull();
-    }
-
-    @Test
-    void paceIsMinutesAndSecondsPerKilometre() {
         assertThat(DataPrinter.pace(2.338)).isEqualTo("7:08 /km");
-        assertThat(DataPrinter.pace(1000 / 299.6)).isEqualTo("5:00 /km");
-        assertThat(DataPrinter.pace(0.5)).isEqualTo("33:20 /km");
         assertThat(DataPrinter.pace(0.0)).isEqualTo("–");
         assertThat(DataPrinter.pace(null)).isEqualTo("–");
+        assertThat(DataPrinter.hours(null)).isNull();
     }
 }

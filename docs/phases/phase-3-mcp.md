@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Next: step 4, the tools._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Next: step 5, errors._
 
 ## What changes
 
@@ -93,7 +93,7 @@ Four tools, as in the project plan. All read-only. The names are the ones the AI
 |---|---|---|
 | `get_activities` | `from`, `to` (dates, optional), `type` (optional), `refresh` (optional) | Activities that started in that range, newest first |
 | `get_activity` | `id` (required), `refresh` | One activity: totals, heart rate, cadence, power, training effect and laps |
-| `get_daily_summary` | `date` (optional), `refresh` | One day's steps, calories, heart rate, stress, Body Battery, intensity minutes, floors |
+| `get_daily_summary` | `date` (optional), `refresh` | One day's steps, calories, heart rate, stress, Body Battery, intensity minutes, floors, and the day's weight and body composition (added 26 October 2026) |
 | `get_sleep` | `date` (optional), `refresh` | The night that ended on that morning: times, stages, score, breathing, SpO2 |
 
 | Input | Means |
@@ -115,11 +115,11 @@ The AI reads the descriptions to choose a tool. So they say what comes back, wha
 
 > **get_activity**: One Garmin activity in detail: start time, type, distance, time and moving time, pace and fastest pace, elevation gain, heart rate, cadence, power, calories, aerobic and anaerobic training effect (0 to 5), training load, and each lap's distance, time, pace, heart rate and elevation. Fields Garmin didn't record are left out. `id` is a number from get_activities.
 
-> **get_daily_summary**: The owner's totals for one day from Garmin: steps and step goal, distance, calories (total and active), resting, minimum and maximum heart rate, average stress (0 to 100), lowest and highest Body Battery (0 to 100), moderate and vigorous intensity minutes, and floors climbed. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers grow as the watch syncs.
+> **get_daily_summary**: The owner's totals for one day from Garmin: steps and step goal, distance, calories (total and active), resting, minimum and maximum heart rate, average stress (0 to 100), lowest and highest Body Battery (0 to 100), moderate and vigorous intensity minutes, and floors climbed. If the owner weighed in that day, also the latest weight in kg and the latest body composition: BMI, body fat and body water in %, muscle and bone mass in kg, visceral fat rating and metabolic age. Fields Garmin didn't record are left out. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers grow as the watch syncs.
 
 > **get_sleep**: The owner's sleep for the night that ended on the morning of `date`: when it started and ended, time asleep, deep, light and REM sleep, time awake, the sleep score (0 to 100) with Garmin's label, average breathing rate and average SpO2. `date` is like 2026-10-23, which means the night of 22 to 23 October. Leave it out for last night.
 
-`refresh` is described the same way in each tool: "Only set this when the owner says data is missing or they just synced their watch. Replies are already kept fresh for 10 to 15 minutes for today and yesterday."
+`refresh` is described the same way in each tool: "Only set this when the owner says data is missing or they just synced their watch, or an activity looks unfinished (Garmin was still processing it). Replies are cached: today's and yesterday's data for 10 to 15 minutes, an activity's details for 7 days." (Reworded 26 October 2026: the first draft only gave the 10 to 15 minutes, but one activity's details are kept for 7 days, whatever its date.)
 
 Server instructions (if step 2 confirms they work): "Garmin data for the owner of this computer. Dates are in the owner's Garmin profile time zone. Units are metric. If a tool says to run `stride-mcp login`, tell the owner to run it in a terminal: this server can't log in by itself."
 
@@ -138,8 +138,9 @@ The JSON is shaped for an AI reader, not copied from the records:
 | Missing values left out, not `null` | Less noise. The description says fields may be missing. |
 | Each reply says `today` and `timeZone` | An AI often doesn't know today's date, or whose "today" it is |
 | No data is not an error | An empty list, or `"recorded": false` for sleep and daily summary |
+| Compact JSON, fields in a fixed order (`today` first) | An AI reads it as well without the spaces, in fewer tokens |
 
-For example (the shape, not final; numbers from the live check of 24 October 2026):
+For example (numbers from the live check of 24 October 2026; `GarminToolsTest` pins each reply):
 
 ```json
 {
@@ -159,6 +160,7 @@ For example (the shape, not final; numbers from the live check of 24 October 202
       "duration": "36:01",
       "durationSeconds": 2161,
       "movingDuration": "35:51",
+      "movingDurationSeconds": 2151,
       "pace": "7:08 /km",
       "elevationGainMetres": 18,
       "averageHeartRateBpm": 143,
@@ -175,6 +177,31 @@ These reply records live in `mcp/`. The Garmin records from phase 2 don't change
 
 As in the CLI: Garmin sends `0` for the distance, speed and moving time of activities without them (strength training, indoor cycling). The tools leave those out, so the AI doesn't read "0 km" as a value.
 
+### Settled in step 4 (26 October 2026)
+
+How Spring AI 2.0.2 registers tools, found by reading its source and the MCP Java SDK 2.1.0's, then checked with tests.
+
+| Question | Answer | What we did |
+|---|---|---|
+| How are tools found? | With the annotation scanner on, any Spring bean with `@McpTool` methods. One tool per method. Inputs are the method's parameters, by name. | `GarminTools`, a bean in `McpBeans` (serve mode only) |
+| How are the hints set? | `@McpTool(annotations = @McpAnnotations(readOnlyHint = true, destructiveHint = false))`. Without it, `destructiveHint` defaults to **true**. | Set on all four. `openWorldHint` stays true (Garmin is outside this computer). |
+| Required or optional inputs? | Every parameter is required unless `@McpToolParam(required = false)` | Only `get_activity`'s `id` is required |
+| Is the input schema checked? | Yes, **by the SDK**, before the tool runs. A missing `id` or a wrong type comes back as an error result in the SDK's words: `Tool (get_activity) input validation failed: Validation failed: JSON schema validation errors: [: required property 'id' not found]`. Unknown inputs pass (the schema allows them). | Our own checks cover the rest: dates, the range, `id` above 0, and unknown inputs (the tools take the raw request to see them) |
+| What does a returned `String` become? | One text content, as it is | The tools return a `CallToolResult`, so a bad input can be an error result with our own message |
+| Output schema? | Only with `generateOutputSchema = true` | Left off, as planned |
+
+Also settled:
+
+- **Weight in `get_daily_summary`** (owner's choice, 26 October 2026). The day's latest weight and latest body composition, picked as the CLI's `summary` does. The CLI and the tools share the picking (`garmin/DayWeight`). If the weigh-ins can't be read, the totals still come back, with `weightLeftOut` saying why. Sleep stays in `get_sleep`. The weigh-in field names and grams are still unconfirmed from a real weigh-in (see AGENTS.md).
+- **Defaults when only one end is given:** only `to` means the 7 days ending then. Only `from` means from then to today.
+- **Blank inputs** (`""`) are taken as left out. Some AI apps send them for "no value".
+- **`type`** is trimmed and lower-cased (Garmin's keys are lower case).
+- **One log line per call** at INFO: `get_sleep refused its input in 3 ms`, `get_activities worked in 412 ms`, or `… failed in … ms: RateLimitedException` for Garmin's errors. No inputs, no replies. A bug (any other exception) is logged with its stack trace: the log is the only place to find it.
+- **Shared with the CLI, in `garmin/`:** the default range (`GarminDataConfig.DEFAULT_RANGE_DAYS`, 7), "a day with no data" (`DailySummary.isEmpty()`, which also sets its cache lifetime), and how durations, pace and Garmin's labels read (`Units`). The tool descriptions are built from `MAX_RANGE_DAYS` and `DEFAULT_RANGE_DAYS`. A test checks that the `refresh` text matches the cache lifetimes.
+- **Not done:** fetching the daily summary and the weigh-ins at the same time. It would save one round trip, only when nothing is cached, and sends Garmin two requests at once. Spreading out requests is phase 4.
+
+What step 5 must change: the tools still throw Garmin's errors and bugs, so Spring AI shows its default text (the message twice). Step 5 catches them in `GarminTools.call`, words the ones that mention CLI commands for the AI (for example the 404's "Check the id in `stride-mcp activities`"), and decides whether to keep the SDK's wording for a missing or wrongly typed `id` or replace it.
+
 ## Errors
 
 The AI sees an error result with a message. It usually passes it on to me. Phase 2's messages already say what to do next, so the tools reuse them.
@@ -183,7 +210,8 @@ The AI sees an error result with a message. It usually passes it on to me. Phase
 |---|---|
 | Not logged in, session expired | "Not logged in. Run `stride-mcp login`." The server can't log in itself: the browser sign-in and paste need a terminal. After a login in the terminal, the next tool call works, with no restart. (Tokens are read from the file on each call.) |
 | 403, 429 | Phase 1's "wait a while" messages. The description doesn't invite retries. stride-mcp never retries these. |
-| Bad date, `from` after `to`, more than 90 days, unknown input | "Dates look like 2026-10-22.", "The range can be at most 90 days." Nothing is sent to Garmin. |
+| Bad date, `from` after `to`, more than 90 days, unknown input | "`date` isn't a date. Dates look like 2026-10-22.", "The range can be at most 90 days. …", "Unknown input `days`. …" No data is asked for. (Done in step 4.) Only one check needs Garmin: with `from` but no `to`, `to` is today, and today needs the profile's time zone. That's the lookup every call makes, kept for 7 days. |
+| Missing `id`, or a wrong type | For now the SDK's own words (see [Settled in step 4](#settled-in-step-4-26-october-2026)). Nothing is sent to Garmin. |
 | No activity with that id | "No activity with id 123. Check the id with get_activities." |
 | Garmin wouldn't share the summary, reply not as expected, more than 200 activities | Phase 2's messages |
 | Anything else (a bug) | "stride-mcp hit an unexpected error. Details are in ~/.stride-mcp/stride-mcp.log." The details go to the log, never to the AI. |
@@ -225,7 +253,7 @@ com.hammez.stride
 │   ├── StdioServer        the SDK's stdio transport on the kept stdout, and a wait until it closes
 │   ├── McpStreams         stdin and the kept stdout, handed over by main
 │   └── PrivateLogFile     gets the log file ready (600, no links, kept small) before logging opens it
-├── garmin/                unchanged, plus the 90-day limit in GarminDataConfig
+├── garmin/                unchanged, plus the 90-day limit in GarminDataConfig, and DayWeight (the weigh-ins the CLI and tools show), Units (durations, pace, labels), DEFAULT_RANGE_DAYS, DailySummary.isEmpty()
 └── garmin/auth/           unchanged
 src/main/resources/
 ├── application.properties         + MCP server off
@@ -262,7 +290,7 @@ At the live check:
 1. ✅ **Plan:** this doc. Drafted 24 October 2026, approved 25 October 2026.
 2. ✅ **Dependencies and `serve`:** Spring Boot 4.1.2, Spring AI 2.0.2, webmvc and actuator dropped. `serve` mode with the server off elsewhere, stdout kept clean, logs to a file, waits until stdin closes. Settled: see [Settled in step 2](#settled-in-step-2-25-october-2026). Done 25 October 2026. Tests: a server with no tools answers `initialize` and `tools/list`, and stdout carries only JSON-RPC.
 3. ✅ **Shared rules:** the 90-day limit into `GarminDataConfig.MAX_RANGE_DAYS`, used by the CLI's check and usage text. `GarminClient.activities` refuses a bad range as a safety net. Done 25 October 2026. Tests: the CLI's wording is unchanged, and the client refuses 91 days or `from` after `to` with nothing sent to Garmin.
-4. **The tools and their replies** in `mcp/`, with descriptions. Tests against the fixtures.
+4. ✅ **The tools and their replies** in `mcp/`, with descriptions. Settled: see [Settled in step 4](#settled-in-step-4-26-october-2026). Done 26 October 2026. Tests: each tool's JSON from the fixtures, the defaults, `type` and `refresh` passed on, Garmin's `0`s and missing values left out, each bad input refused with nothing sent to Garmin, and the four tools with their descriptions and hints in `tools/list` over stdio.
 5. **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Tests for each row of [Errors](#errors).
 6. **End to end over stdio:** the piped-stream test, and the side-by-side test.
 7. **Docs:** [Running it](../running.md) gets the `serve` command. The quick start gets a short "Use it from an AI app" section. AGENTS.md status.
@@ -271,7 +299,7 @@ At the live check:
 ## Not in phase 3
 
 - Local HTTP or hosted (phase 5)
-- New kinds of data: steps detail, weight, HRV, training status (phase 4)
+- New kinds of data: steps detail, weight history, HRV, training status (phase 4). One day's weight is in `get_daily_summary` since step 4.
 - Prompts or resources, such as a "weekly review" prompt (later, maybe)
 - Structured output schemas (when AI apps support them more widely)
 - A memory cache in front of the files (phase 4, if needed)
