@@ -76,6 +76,11 @@ public class GarminClient {
         return skipCache ? this : new GarminClient(api, cache, config, json, clock, fallbackZone, true, remembered);
     }
 
+    /** Why the cache couldn't be used or saved to, the last time it failed (see {@link GarminCache#problem()}). */
+    public Optional<String> cacheProblem() {
+        return cache.problem();
+    }
+
     /** The display name the daily endpoints need, and the time zone that decides what "today" is. */
     private record Me(String displayName, ZoneId zone) {
     }
@@ -183,7 +188,8 @@ public class GarminClient {
     /**
      * One activity, with its laps (2 calls, cached as 2 files).
      *
-     * @throws NotFoundException if there's no activity with that id
+     * @throws NotFoundException if there's no activity with that id: "No activity with id 123." Each caller adds
+     *                           where to find a good id.
      */
     public ActivityDetails activity(long id) {
         String key = String.valueOf(id);
@@ -204,7 +210,7 @@ public class GarminClient {
             cache.put(splitsName, splits, lifetimes().activity());
             return details;
         } catch (NotFoundException e) {
-            throw new NotFoundException("No activity with id " + id + ". Check the id in `stride-mcp activities`.");
+            throw new NotFoundException("No activity with id " + id + ".", e);
         }
     }
 

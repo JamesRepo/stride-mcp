@@ -222,6 +222,17 @@ class DataCommandsTest {
         assertThat(out()).isEmpty();
     }
 
+    @Test
+    void anHttpErrorShowsGarminsReply() {
+        // The MCP tools leave Garmin's reply out. The CLI shows it, after the message.
+        garmin.respond("/activity-service/activity/1", 500, "{\"message\":\"down\"}");
+
+        assertThat(run("activity", "1")).isEqualTo(1);
+
+        assertThat(err()).isEqualTo("Garmin returned HTTP 500 during the request to /activity-service/activity/1. "
+                + "Try again later. Response: {\"message\":\"down\"}\n");
+    }
+
     // summary
 
     @Test

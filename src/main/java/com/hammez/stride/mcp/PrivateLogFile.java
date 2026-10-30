@@ -44,7 +44,7 @@ public final class PrivateLogFile implements ApplicationListener<ApplicationEnvi
         if (name == null || name.isBlank()) {
             return;
         }
-        Path file = Path.of(name).toAbsolutePath().normalize();
+        Path file = path(name);
         try {
             prepare(file, MAX_BYTES);
         } catch (IOException e) {
@@ -55,6 +55,14 @@ public final class PrivateLogFile implements ApplicationListener<ApplicationEnvi
     @Override
     public int getOrder() {
         return LoggingApplicationListener.DEFAULT_ORDER - 1;
+    }
+
+    /**
+     * The log file named by {@code logging.file.name}, in full. The one place it's worked out, so the tools'
+     * message about a bug names the file this prepares.
+     */
+    static Path path(String name) {
+        return Path.of(name).toAbsolutePath().normalize();
     }
 
     static void prepare(Path file, long maxBytes) throws IOException {

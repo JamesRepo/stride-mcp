@@ -6,6 +6,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Supplier;
 
 import org.slf4j.Logger;
@@ -14,12 +15,14 @@ import org.springframework.ai.mcp.annotation.McpTool;
 import org.springframework.ai.mcp.annotation.McpTool.McpAnnotations;
 import org.springframework.ai.mcp.annotation.McpToolParam;
 
+import com.hammez.stride.garmin.ActivityDetails;
 import com.hammez.stride.garmin.GarminClient;
 import com.hammez.stride.garmin.GarminDataConfig;
 import com.hammez.stride.garmin.WeighIn;
 import com.hammez.stride.garmin.UnexpectedReplyException;
 import com.hammez.stride.garmin.auth.GarminException;
 import com.hammez.stride.garmin.auth.NotFoundException;
+import com.hammez.stride.garmin.auth.TokenFileException;
 
 import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
@@ -29,10 +32,14 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
  * its input first, so a bad one never reaches Garmin, then asks {@link GarminClient} and returns
  * {@link ToolReplies}' JSON as text. All read-only.
  * <p>
- * A bad input is an error result with our own message. Other errors (Garmin's, and bugs) are still thrown, and
- * Spring AI turns them into an error result with the exception's message: step 5 of phase 3 replaces that.
+ * Every exception is an error result with our own message, said once, so Spring AI's default text (the message
+ * twice) is never used: a bad input, Garmin's errors, and a token file problem. Anything else is a bug: its message
+ * only says where the log is, and its details stay in the log. {@link Error}s (out of memory, stack overflow) are
+ * left to the server: carrying on after one isn't safe.
  * <p>
- * One log line per call: the tool, how long it took, and whether it worked. Never its input or Garmin's reply.
+ * One log line per call: the tool, how long it took, and whether it worked, with the message the AI got if it
+ * didn't. Never the inputs or Garmin's replies. The first cache problem is logged once per run, not told to the
+ * AI: the reply is still right, and the fix is a setting in the AI app's server config.
  */
 class GarminTools {
 
@@ -77,10 +84,14 @@ class GarminTools {
             + "and yesterday's data for 10 to 15 minutes, an activity's details for 7 days.";
 
     private final GarminClient garmin;
+    private final String logFile;
     private final ToolReplies replies = new ToolReplies();
+    private final AtomicBoolean cacheProblemLogged = new AtomicBoolean();
 
-    GarminTools(GarminClient garmin) {
+    /** @param logFile where serve mode logs, for the message about a bug */
+    GarminTools(GarminClient garmin, String logFile) {
         this.garmin = garmin;
+        this.logFile = logFile;
     }
 
     @McpTool(name = "get_activities", description = GET_ACTIVITIES,
@@ -134,7 +145,13 @@ class GarminTools {
                 throw new BadInput("`id` is a number from get_activities, like 24810777073.");
             }
             GarminClient client = client(refresh);
-            return replies.activity(client.activity(id), client.today(), client.zone());
+            ActivityDetails details;
+            try {
+                details = client.activity(id);
+            } catch (NotFoundException e) {
+                throw new NotFoundException(e.getMessage() + " Check the id with get_activities.", e);
+            }
+            return replies.activity(details, client.today(), client.zone());
         });
     }
 
@@ -181,7 +198,7 @@ class GarminTools {
 
     /**
      * Runs one tool call: refuses inputs the tool doesn't take, then does the work and returns its reply as JSON
-     * text. Logs one line.
+     * text. Any error becomes an error result with our message. Logs one line.
      */
     private CallToolResult call(String tool, CallToolRequest request, List<String> inputs, Supplier<Object> work) {
         long start = System.nanoTime();
@@ -191,18 +208,44 @@ class GarminTools {
             log.info("{} worked in {} ms", tool, millisSince(start));
             return result;
         } catch (BadInput e) {
+            // The input stays out of the log, so not the message either.
             log.info("{} refused its input in {} ms", tool, millisSince(start));
-            return CallToolResult.builder().isError(true).addTextContent(e.getMessage()).build();
+            return error(e.getMessage());
         } catch (GarminException e) {
-            // Step 5 turns these into error results with our own wording. Until then Spring AI does.
-            log.warn("{} failed in {} ms: {}", tool, millisSince(start), e.getClass().getSimpleName());
-            throw e;
-        } catch (RuntimeException e) {
+            // Its message says what to do next. Garmin's reply is kept apart from it (garminReply()).
+            return failed(tool, start, e.getMessage());
+        } catch (TokenFileException e) {
+            return failed(tool, start, e.explained());
+        } catch (Exception e) {
             // A bug. This log is the only place to find it, so it gets the stack trace. Tokens never reach this
-            // layer, and Garmin's replies are only read inside garmin/.
+            // layer, and Garmin's replies are only read inside garmin/. The AI only learns where the log is.
+            // Exception, not RuntimeException: a checked exception thrown sneakily is a bug too.
             log.error("{} failed in {} ms", tool, millisSince(start), e);
-            throw e;
+            return error("stride-mcp hit an unexpected error. Details are in " + logFile + ".");
+        } finally {
+            logCacheProblem();
         }
+    }
+
+    private static CallToolResult failed(String tool, long start, String message) {
+        log.warn("{} failed in {} ms: {}", tool, millisSince(start), message);
+        return error(message);
+    }
+
+    /**
+     * Once per run. A failed save names a different file each time, and the cache never forgets a problem, so
+     * logging each new one would repeat it on every call.
+     */
+    private void logCacheProblem() {
+        garmin.cacheProblem().ifPresent(problem -> {
+            if (cacheProblemLogged.compareAndSet(false, true)) {
+                log.warn("{} Further cache problems aren't logged until stride-mcp restarts.", problem);
+            }
+        });
+    }
+
+    private static CallToolResult error(String message) {
+        return CallToolResult.builder().isError(true).addTextContent(message).build();
     }
 
     private static void unknownInputs(String tool, CallToolRequest request, List<String> inputs) {

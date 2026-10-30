@@ -13,6 +13,7 @@ import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.Map;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -136,9 +137,11 @@ class GarminApiTest {
                 .respond(TOKEN_PATH, 200, tokenReply(fresh, "refresh-2"))
                 .respond(PATH, 500, "{\"seen\":\"old-opaque-token\",\"now\":\"" + fresh + "\"}");
 
-        assertThat(catchThrowable(() -> api.get(PATH, Map.of())))
-                .isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500")
-                .hasMessageNotContaining("old-opaque-token").hasMessageNotContaining(fresh);
+        Throwable thrown = catchThrowable(() -> api.get(PATH, Map.of()));
+
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500");
+        assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
+                .contains("seen").doesNotContain("old-opaque-token").doesNotContain(fresh);
     }
 
     @Test
@@ -205,9 +208,11 @@ class GarminApiTest {
 
         Throwable thrown = catchThrowable(() -> api.get(PATH, Map.of()));
 
+        // The snippet is Garmin's reply, kept apart from the message: the CLI shows it, the MCP tools don't.
         assertThat(thrown).isExactlyInstanceOf(GarminException.class)
-                .hasMessageContaining("HTTP 503").hasMessageContaining("down")
-                .hasMessageNotContaining(access).hasMessageNotContaining("eyJ");
+                .hasMessage("Garmin returned HTTP 503 during the request to " + PATH + ". Try again later.");
+        assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
+                .contains("down").doesNotContain(access).doesNotContain("eyJ");
         assertThat(garmin.requests()).hasSize(1);
     }
 

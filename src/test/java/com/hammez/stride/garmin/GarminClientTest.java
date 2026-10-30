@@ -258,7 +258,7 @@ class GarminClientTest {
         garmin.respond("/activity-service/activity/1", 404, "{\"message\":\"Not Found\"}");
 
         assertThat(catchThrowable(() -> client.activity(1))).isInstanceOf(NotFoundException.class)
-                .hasMessage("No activity with id 1. Check the id in `stride-mcp activities`.");
+                .hasMessage("No activity with id 1.");
         assertThat(garmin.requests()).hasSize(1);
     }
 

@@ -65,13 +65,13 @@ final class GarminHttp {
 
     static GarminException unexpected(String step, HttpResponse<String> response, String... secrets) {
         return new GarminException("Garmin returned HTTP " + response.statusCode() + " during " + step
-                + ". Try again later. Response: " + Redactor.redact(response.body(), secrets));
+                + ". Try again later.", Redactor.redact(response.body(), secrets));
     }
 
     /** HTTP 400 or 401 with an error we don't recognise. Logging in again is the likely fix. */
     static GarminException rejected(String step, HttpResponse<String> response, String... secrets) {
         return new GarminException("Garmin rejected " + step + " (HTTP " + response.statusCode() + "). "
-                + "Run `stride-mcp login` again. If it keeps failing, check for an update to stride-mcp. "
-                + "Response: " + Redactor.redact(response.body(), secrets));
+                + "Run `stride-mcp login` again. If it keeps failing, check for an update to stride-mcp.",
+                Redactor.redact(response.body(), secrets));
     }
 }

@@ -18,6 +18,7 @@ import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.boot.ExitCodeGenerator;
 
+import com.hammez.stride.garmin.ActivityDetails;
 import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.GarminCache;
@@ -145,7 +146,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             command.run();
             return 0;
         } catch (GarminException e) {
-            io.err().println(e.getMessage());
+            io.err().println(e.getMessage() + e.garminReply().map(reply -> " Response: " + reply).orElse(""));
             return 1;
         } catch (UncheckedIOException e) {
             io.err().println(e.getMessage() + ": " + e.getCause().getMessage());
@@ -195,7 +196,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             case "activity" -> {
                 arguments(line, 1, 1);
                 long id = activityId(line.arguments().getFirst());
-                yield () -> new DataPrinter(io.out()).activity(data.activity(id));
+                yield () -> new DataPrinter(io.out()).activity(activity(data, id));
             }
             case "summary" -> {
                 arguments(line, 0, 1);
@@ -262,6 +263,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         LocalDate from = to.minusDays(days - 1);
         List<ActivitySummary> found = data.activities(from, to, type);
         new DataPrinter(io.out()).activities(found, from, to, type);
+    }
+
+    /** One activity. For a wrong id, the client's message plus where to find a good one. */
+    private static ActivityDetails activity(GarminClient data, long id) {
+        try {
+            return data.activity(id);
+        } catch (NotFoundException e) {
+            throw new NotFoundException(e.getMessage() + " Check the id in `stride-mcp activities`.", e);
+        }
     }
 
     /**

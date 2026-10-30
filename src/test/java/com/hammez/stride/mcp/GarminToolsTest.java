@@ -3,6 +3,9 @@ package com.hammez.stride.mcp;
 import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
@@ -14,12 +17,22 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.mcp.annotation.provider.tool.SyncMcpToolProvider;
+
+import ch.qos.logback.classic.Level;
+import ch.qos.logback.classic.Logger;
+import ch.qos.logback.classic.spi.ILoggingEvent;
+import ch.qos.logback.classic.spi.ThrowableProxyUtil;
+import ch.qos.logback.core.read.ListAppender;
 
 import com.hammez.stride.garmin.Fixtures;
 import com.hammez.stride.garmin.GarminCache;
@@ -42,6 +55,8 @@ import tools.jackson.databind.json.JsonMapper;
  * <p>
  * What the server adds on top (the SDK checking inputs against the schema, the JSON-RPC around it) is in
  * ServeModeTest.
+ * <p>
+ * Every test also checks that no token shows up in any reply or log line.
  */
 class GarminToolsTest {
 
@@ -55,6 +70,7 @@ class GarminToolsTest {
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
     private static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
+    private static final String LOG_FILE = "/Users/owner/.stride-mcp/stride-mcp.log";
 
     @TempDir
     Path temp;
@@ -63,13 +79,28 @@ class GarminToolsTest {
     private final JsonMapper json = JsonMapper.builder().build();
     private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     private final List<String> replies = new ArrayList<>();
+    private final Logger toolsLog = (Logger) LoggerFactory.getLogger(GarminTools.class);
+    private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
+    private Level toolsLogLevel;
     private List<SyncToolSpecification> tools;
+
+    @BeforeEach
+    void captureTheLog() {
+        // INFO, as in serve mode: the one line per call.
+        toolsLogLevel = toolsLog.getLevel();
+        toolsLog.setLevel(Level.INFO);
+        logged.start();
+        toolsLog.addAppender(logged);
+    }
 
     @AfterEach
     void noTokenEverShows() {
         garmin.close();
+        toolsLog.detachAppender(logged);
+        toolsLog.setLevel(toolsLogLevel);
         assertThat(String.join("\n", replies)).doesNotContain(FakeGarmin.ACCESS_TOKEN)
                 .doesNotContain(FakeGarmin.REFRESH_TOKEN);
+        assertThat(log()).doesNotContain(FakeGarmin.ACCESS_TOKEN).doesNotContain(FakeGarmin.REFRESH_TOKEN);
     }
 
     // What the AI sees in tools/list
@@ -486,6 +517,175 @@ class GarminToolsTest {
         assertThat(garmin.requests()).isEmpty();
     }
 
+    // Errors: an error result in our own words, said once
+
+    @Test
+    void notLoggedIn() {
+        tools();
+        deleteTokenFile();
+
+        assertThat(error("get_sleep", Map.of())).isEqualTo("Not logged in. Run `stride-mcp login`.");
+        assertThat(garmin.requests()).isEmpty();
+        // The log line says what the AI was told.
+        assertThat(log()).isEqualTo("WARN get_sleep failed in N ms: Not logged in. Run `stride-mcp login`.");
+    }
+
+    @Test
+    void sessionExpired() {
+        // Garmin turns the access token down, then the refresh token.
+        garmin.respond(PROFILE_PATH, 401, "").respond(FakeGarmin.TOKEN_PATH, 401, "{\"error\":\"invalid_grant\"}");
+
+        assertThat(error("get_activities", Map.of())).isEqualTo("Session expired. Run `stride-mcp login`.");
+        assertThat(garmin.requests(FakeGarmin.TOKEN_PATH)).hasSize(1);
+    }
+
+    @Test
+    void noActivityWithThatIdPointsToGetActivitiesNotTheCli() {
+        garmin.respond(ACTIVITY, 404, "");
+
+        assertThat(error("get_activity", Map.of("id", 24816092240L)))
+                .isEqualTo("No activity with id 24816092240. Check the id with get_activities.");
+        assertThat(log()).isEqualTo("WARN get_activity failed in N ms: No activity with id 24816092240. Check the "
+                + "id with get_activities.");
+    }
+
+    @Test
+    void forbiddenOnceWithNoRetry() {
+        garmin.respond(PROFILE_PATH, 403, "<html>blocked</html>");
+
+        assertThat(error("get_sleep", Map.of())).isEqualTo("Garmin refused the request during the request to "
+                + PROFILE_PATH + " (HTTP 403). It may be blocking this connection. Wait a while before trying again.");
+        assertThat(garmin.requests()).hasSize(1);
+    }
+
+    @Test
+    void rateLimitedOnceWithNoRetry() {
+        garmin.respond(PROFILE_PATH, 429, "");
+
+        assertThat(error("get_daily_summary", Map.of()))
+                .isEqualTo("Garmin is rate limiting. Wait a while (an hour or more) before trying again.");
+        assertThat(garmin.requests()).hasSize(1);
+        assertThat(log()).isEqualTo("WARN get_daily_summary failed in N ms: Garmin is rate limiting. Wait a while "
+                + "(an hour or more) before trying again.");
+    }
+
+    @Test
+    void garminWouldNotShareTheDailySummary() {
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{\"privacyProtected\":true}");
+
+        assertThat(error("get_daily_summary", Map.of()))
+                .isEqualTo("Garmin wouldn't share the summary for 2026-10-24. Run `stride-mcp login` again.");
+        assertThat(garmin.requests(WEIGHT_PATH + "2026-10-24")).isEmpty();
+    }
+
+    @Test
+    void anUnexpectedReply() {
+        signedIn();
+        garmin.respond(SLEEP, 200, "[1, 2]");
+
+        assertThat(error("get_sleep", Map.of("date", "2026-10-23"))).isEqualTo("Garmin's reply for the sleep for "
+                + "the night ending 2026-10-23 wasn't what stride-mcp expected. Garmin may have changed it. Check for "
+                + "an update to stride-mcp.");
+    }
+
+    @Test
+    void anotherHttpErrorLeavesGarminsReplyOut() {
+        // The CLI shows Garmin's error body. The AI and the log don't get it.
+        signedIn();
+        garmin.respond(SLEEP, 500, "{\"message\":\"internal detail\"}");
+
+        assertThat(error("get_sleep", Map.of())).isEqualTo("Garmin returned HTTP 500 during the request to "
+                + SLEEP.replace(" ", "%20") + ". Try again later.");
+        assertThat(log()).isEqualTo("WARN get_sleep failed in N ms: Garmin returned HTTP 500 during the request "
+                + "to " + SLEEP.replace(" ", "%20") + ". Try again later.");
+    }
+
+    @Test
+    void moreThanTwoHundredActivities() {
+        signedIn();
+        for (int page = 0; page < 10; page++) {
+            garmin.respond(ACTIVITIES, 200, IntStream.range(page * 20, page * 20 + 20)
+                    .mapToObj(id -> "{\"activityId\":" + (id + 1) + "}").collect(Collectors.joining(",", "[", "]")));
+        }
+
+        assertThat(error("get_activities", Map.of("from", "2026-10-01", "to", "2026-10-24")))
+                .isEqualTo("More than 200 activities from 2026-10-01 to 2026-10-24. Try a shorter range.");
+    }
+
+    @Test
+    void aTokenFileProblem() throws Exception {
+        tools();
+        Path lockFile = temp.resolve("garmin_tokens.json.lock");
+        Files.deleteIfExists(lockFile);
+        Files.createDirectory(lockFile);
+
+        // With the reason, which the cause's message alone doesn't always give, and what to do next.
+        String told = "Couldn't open the lock file " + lockFile + " (is a directory). Check that "
+                + lockFile.getParent() + " and the files in it are yours and can be read and written.";
+        assertThat(error("get_activities", Map.of())).isEqualTo(told);
+        assertThat(garmin.requests()).isEmpty();
+        assertThat(log()).isEqualTo("WARN get_activities failed in N ms: " + told);
+    }
+
+    @Test
+    void aBugOnlyPointsToTheLogAndItsDetailsStayThere() {
+        // An UncheckedIOException that isn't the token file's, and a checked exception thrown sneakily, are bugs too.
+        List<Throwable> bugs = List.of(new IllegalStateException("a detail only the log should have"),
+                new UncheckedIOException(new IOException("a detail only the log should have")),
+                new IOException("a detail only the log should have"));
+        for (Throwable bug : bugs) {
+            logged.list.clear();
+            var api = garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock);
+            var cache = new GarminCache(temp.resolve("cache"), json, clock);
+            var broken = new GarminClient(api, cache, GarminDataConfig.defaults(garmin.config()), json, clock,
+                    ZoneOffset.UTC) {
+                @Override
+                public LocalDate today() {
+                    throw GarminToolsTest.<RuntimeException>sneaky(bug);
+                }
+            };
+            tools = new SyncMcpToolProvider(List.of(new GarminTools(broken, LOG_FILE))).getToolSpecifications();
+
+            assertThat(error("get_sleep", Map.of())).as(bug.toString())
+                    .isEqualTo("stride-mcp hit an unexpected error. Details are in " + LOG_FILE + ".");
+            assertThat(log()).as(bug.toString()).startsWith("ERROR get_sleep failed in N ms\n"
+                    + bug.getClass().getName() + ": ").contains("a detail only the log should have");
+        }
+    }
+
+    /** Throws any exception, checked or not, as the compiler can't see. */
+    @SuppressWarnings("unchecked")
+    private static <T extends Throwable> T sneaky(Throwable e) throws T {
+        throw (T) e;
+    }
+
+    @Test
+    void aCacheThatCantBeUsedIsLoggedOnceAndTheRepliesStillCome() throws Exception {
+        Path cacheDir = temp.resolve("cache");
+        Files.createDirectory(cacheDir);
+        signedIn();
+        garmin.respond(SLEEP, 204, "").respond(SLEEP, 204, "").respond(SLEEP, 204, "");
+
+        String first = ok("get_sleep", Map.of());
+        String second = ok("get_sleep", Map.of());
+        // A different problem: a link where the folder was. Still not logged again.
+        Files.delete(cacheDir);
+        Files.createSymbolicLink(cacheDir, temp);
+        String third = ok("get_sleep", Map.of());
+
+        assertThat(first).isEqualTo(second).isEqualTo(third).doesNotContain("cache");
+        // Nothing cached, so Garmin is asked every time.
+        assertThat(garmin.requests(SLEEP)).hasSize(3);
+        assertThat(log()).isEqualTo("""
+                INFO get_sleep worked in N ms
+                WARN Not using the cache: %s already exists and wasn't made by stride-mcp. Pick a folder that \
+                doesn't exist yet with --stride.cache-dir, and stride-mcp will create it. Further cache problems \
+                aren't logged until stride-mcp restarts.
+                INFO get_sleep worked in N ms
+                INFO get_sleep worked in N ms""".formatted(cacheDir));
+    }
+
     /** Calls the tool, checks it worked, and returns its one text reply. */
     private String ok(String tool, Map<String, Object> arguments) {
         CallToolResult result = call(tool, arguments);
@@ -520,9 +720,26 @@ class GarminToolsTest {
             var cache = new GarminCache(temp.resolve("cache"), json, clock);
             var client = new GarminClient(api, cache, GarminDataConfig.defaults(garmin.config()), json, clock,
                     ZoneOffset.UTC);
-            tools = new SyncMcpToolProvider(List.of(new GarminTools(client))).getToolSpecifications();
+            tools = new SyncMcpToolProvider(List.of(new GarminTools(client, LOG_FILE))).getToolSpecifications();
         }
         return tools;
+    }
+
+    private void deleteTokenFile() {
+        try {
+            Files.delete(temp.resolve("garmin_tokens.json"));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+    }
+
+    /** What GarminTools logged, one line per event (plus any stack trace), with the times as N. */
+    private String log() {
+        return logged.list.stream()
+                .map(event -> event.getLevel() + " " + event.getFormattedMessage().replaceAll("\\d+ ms", "N ms")
+                        + (event.getThrowableProxy() == null ? ""
+                                : "\n" + ThrowableProxyUtil.asString(event.getThrowableProxy())))
+                .collect(Collectors.joining("\n"));
     }
 
     private Tool tool(String name) {

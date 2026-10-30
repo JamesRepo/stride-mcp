@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Next: step 5, errors._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Step 5 (errors) done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026). Next: step 6, end to end over stdio._
 
 ## What changes
 
@@ -61,7 +61,7 @@ java -jar stride-mcp.jar serve
 **Keeping stdout clean.** In `serve` mode:
 
 - No banner (already off), no startup info (already off), console logging off.
-- Logs go to `~/.stride-mcp/stride-mcp.log`, a `600` file. A missing folder is created as `700`; an existing one is left alone, in case it's one the owner named with `--stride.log-file`. A link or a folder at the log path is refused. No log rolling (it would create new files open to others): instead, at startup a log over 10 MB becomes `stride-mcp.log.old` and a new one starts. Warnings and errors only, plus one line per tool call (tool name, how long it took, whether it worked). Never tokens, never Garmin's replies.
+- Logs go to `~/.stride-mcp/stride-mcp.log`, a `600` file. A missing folder is created as `700`; an existing one is left alone, in case it's one the owner named with `--stride.log-file`. A link or a folder at the log path is refused. No log rolling (it would create new files open to others): instead, at startup a log over 10 MB becomes `stride-mcp.log.old` and a new one starts. Warnings and errors only, plus one line per tool call (tool name, how long it took, whether it worked, and the message the AI got if it failed). Never tokens, never Garmin's replies.
 - Belt and braces: the server keeps the real stdout for itself, then points `System.out` at stderr. So a stray `println` anywhere can't break the connection. AI apps keep a server's stderr as its log.
 
 `serve` takes no options except the Spring settings (`--stride.token-file=…`, `--stride.cache-dir=…`). `whoami`, `capture` and the others don't change.
@@ -76,7 +76,7 @@ Answered by reading Spring AI 2.0.2's and the MCP Java SDK 2.1.0's source, then 
 | The stdio transport needs `spring.ai.mcp.server.stdio=true` | No. This starter always builds a stdio transport. The setting only turns off the stateless and web variants. | Set anyway, in the `serve` profile, so the intent is clear |
 | Our own transport bean replaces the default one | Yes (`@ConditionalOnMissingBean`) | `mcp/StdioServer` uses the stdout that `main` kept. It also notices when the connection ends: see below. |
 | `spring.ai.mcp.server.instructions` sets the server's instructions | Yes. The AI gets them in the `initialize` reply. | Set in the `serve` profile |
-| A `RuntimeException` from a tool becomes an error result | Yes, but the text is the exception's message **twice**, plus its root cause's message. A checked exception becomes a protocol error instead. | Step 5: the tools catch everything themselves and build the error result, so the AI only sees our wording and a bug's details stay in the log (the plan's fallback) |
+| A `RuntimeException` from a tool becomes an error result | Yes, but the text is the exception's message **twice**, plus its root cause's message. A checked exception becomes a protocol error instead. | The tools catch everything themselves and build the error result, so the AI only sees our wording and a bug's details stay in the log (the plan's fallback). Done in step 5. |
 
 Two more things found:
 
@@ -121,7 +121,7 @@ The AI reads the descriptions to choose a tool. So they say what comes back, wha
 
 `refresh` is described the same way in each tool: "Only set this when the owner says data is missing or they just synced their watch, or an activity looks unfinished (Garmin was still processing it). Replies are cached: today's and yesterday's data for 10 to 15 minutes, an activity's details for 7 days." (Reworded 26 October 2026: the first draft only gave the 10 to 15 minutes, but one activity's details are kept for 7 days, whatever its date.)
 
-Server instructions (if step 2 confirms they work): "Garmin data for the owner of this computer. Dates are in the owner's Garmin profile time zone. Units are metric. If a tool says to run `stride-mcp login`, tell the owner to run it in a terminal: this server can't log in by itself."
+Server instructions (step 2 confirmed they work; widened in step 5): "Garmin data for the owner of this computer. Dates are in the owner's Garmin profile time zone. Units are metric. If a tool says to run a `stride-mcp` command, such as `stride-mcp login`, tell the owner to run it in a terminal: this server can't log in or out by itself."
 
 ### What comes back
 
@@ -196,27 +196,48 @@ Also settled:
 - **Defaults when only one end is given:** only `to` means the 7 days ending then. Only `from` means from then to today.
 - **Blank inputs** (`""`) are taken as left out. Some AI apps send them for "no value".
 - **`type`** is trimmed and lower-cased (Garmin's keys are lower case).
-- **One log line per call** at INFO: `get_sleep refused its input in 3 ms`, `get_activities worked in 412 ms`, or `… failed in … ms: RateLimitedException` for Garmin's errors. No inputs, no replies. A bug (any other exception) is logged with its stack trace: the log is the only place to find it.
+- **One log line per call** at INFO: `get_sleep refused its input in 3 ms`, `get_activities worked in 412 ms`, or `… failed in … ms: RateLimitedException` for Garmin's errors. No inputs, no replies. A bug (any other exception) is logged with its stack trace: the log is the only place to find it. (Step 5 changed the failed line: it now gives the message the AI got, so a date or an id can appear in it.)
 - **Shared with the CLI, in `garmin/`:** the default range (`GarminDataConfig.DEFAULT_RANGE_DAYS`, 7), "a day with no data" (`DailySummary.isEmpty()`, which also sets its cache lifetime), and how durations, pace and Garmin's labels read (`Units`). The tool descriptions are built from `MAX_RANGE_DAYS` and `DEFAULT_RANGE_DAYS`. A test checks that the `refresh` text matches the cache lifetimes.
 - **Not done:** fetching the daily summary and the weigh-ins at the same time. It would save one round trip, only when nothing is cached, and sends Garmin two requests at once. Spreading out requests is phase 4.
 
-What step 5 must change: the tools still throw Garmin's errors and bugs, so Spring AI shows its default text (the message twice). Step 5 catches them in `GarminTools.call`, words the ones that mention CLI commands for the AI (for example the 404's "Check the id in `stride-mcp activities`"), and decides whether to keep the SDK's wording for a missing or wrongly typed `id` or replace it.
+What step 5 had to change: the tools still threw Garmin's errors and bugs, so Spring AI showed its default text (the message twice). Done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026).
 
 ## Errors
 
-The AI sees an error result with a message. It usually passes it on to me. Phase 2's messages already say what to do next, so the tools reuse them.
+The AI sees an error result with one message, said once. It usually passes it on to me. Phase 1 and 2's messages already say what to do next, so the tools reuse them. `GarminTools.call` builds every error result itself, so Spring AI's default text is never used. `GarminToolsTest` pins each row.
 
 | Situation | The AI sees |
 |---|---|
-| Not logged in, session expired | "Not logged in. Run `stride-mcp login`." The server can't log in itself: the browser sign-in and paste need a terminal. After a login in the terminal, the next tool call works, with no restart. (Tokens are read from the file on each call.) |
-| 403, 429 | Phase 1's "wait a while" messages. The description doesn't invite retries. stride-mcp never retries these. |
+| Not logged in | "Not logged in. Run `stride-mcp login`." The server can't log in itself: the browser sign-in and paste need a terminal. After a login in the terminal, the next tool call works, with no restart. (Tokens are read from the file on each call.) |
+| Session expired | "Session expired. Run `stride-mcp login`." |
+| 403 | "Garmin refused the request during the request to /userprofile-service/socialProfile (HTTP 403). It may be blocking this connection. Wait a while before trying again." stride-mcp never retries. |
+| 429 | "Garmin is rate limiting. Wait a while (an hour or more) before trying again." stride-mcp never retries. |
+| Another HTTP error | "Garmin returned HTTP 500 during the request to …. Try again later." Without Garmin's reply, which the CLI adds. |
 | Bad date, `from` after `to`, more than 90 days, unknown input | "`date` isn't a date. Dates look like 2026-10-22.", "The range can be at most 90 days. …", "Unknown input `days`. …" No data is asked for. (Done in step 4.) Only one check needs Garmin: with `from` but no `to`, `to` is today, and today needs the profile's time zone. That's the lookup every call makes, kept for 7 days. |
-| Missing `id`, or a wrong type | For now the SDK's own words (see [Settled in step 4](#settled-in-step-4-26-october-2026)). Nothing is sent to Garmin. |
+| Missing `id`, or a wrong type | The SDK's own words: "Tool (get_activity) input validation failed: …", naming the field. Nothing is sent to Garmin. (Kept in step 5: see [Settled in step 5](#settled-in-step-5-29-october-2026).) |
 | No activity with that id | "No activity with id 123. Check the id with get_activities." |
-| Garmin wouldn't share the summary, reply not as expected, more than 200 activities | Phase 2's messages |
-| Anything else (a bug) | "stride-mcp hit an unexpected error. Details are in ~/.stride-mcp/stride-mcp.log." The details go to the log, never to the AI. |
+| Garmin wouldn't share the summary | "Garmin wouldn't share the summary for 2026-10-24. Run `stride-mcp login` again." |
+| Reply not as expected | "Garmin's reply for the sleep for the night ending 2026-10-23 wasn't what stride-mcp expected. Garmin may have changed it. Check for an update to stride-mcp." |
+| More than 200 activities | "More than 200 activities from 2026-10-01 to 2026-10-24. Try a shorter range." |
+| Token file problem | Its message, the reason and what to do next: "Couldn't open the lock file /Users/…/.stride-mcp/garmin_tokens.json.lock (access denied). Check that /Users/…/.stride-mcp and the files in it are yours and can be read and written." Or, for a file stride-mcp can't read: "Token file … is unreadable. Run `stride-mcp logout`, then `stride-mcp login`." |
+| Anything else (a bug) | "stride-mcp hit an unexpected error. Details are in /Users/…/.stride-mcp/stride-mcp.log." The full path, from `logging.file.name`. The details and stack trace go to the log, never to the AI. Any exception counts, checked ones included. `Error`s (out of memory, stack overflow) are left to the server: carrying on after one isn't safe. |
 
-A few phase 2 messages mention CLI commands, for example "Check the id in `stride-mcp activities`". The tools word those for the AI instead. Messages that say "Run `stride-mcp login`" stay as they are: that's what I'd do in either case.
+Only one phase 2 message mentioned a CLI command the AI can't use: the 404's "Check the id in `stride-mcp activities`". `get_activity` words it for the AI; the CLI's wording is unchanged. Messages that say "Run `stride-mcp login`" or "`stride-mcp logout`" stay as they are: the owner runs those in either case, and the server instructions tell the AI to pass them on.
+
+### Settled in step 5 (29 October 2026)
+
+| Question | Answer | What we did |
+|---|---|---|
+| Can Spring AI 2.0.2 turn off the SDK's input check? | No property for it. A `McpSyncServerCustomizer` bean could call the SDK 2.1.0's `validateToolInputs(false)`. But then a wrong type never reaches our code: Spring AI converts the arguments first, so `"id": "abc"` gets its default "Conversion from JSON to java.lang.Long failed" text, and `1.5` is cut to `1` and sent to Garmin (checked with a test). | Owner's choice: keep the SDK's check and its wording. It names the field and nothing reaches Garmin. |
+| A cache folder that can't be used, in serve mode | The CLI prints `GarminCache.problem()` on stderr. The reply is still right (it came from Garmin), and the AI can't fix the folder: the fix is `--stride.cache-dir` in the AI app's server settings. A failed save names a different file each time, and the cache never forgets a problem. | Owner's choice: logged, not told to the AI. The first problem is logged once per run ("Further cache problems aren't logged until stride-mcp restarts."). Tools read it through `GarminClient.cacheProblem()`. |
+| Garmin's reply in an HTTP error | The CLI showed Garmin's error body (secrets hidden) at the end of the message. | Kept apart: `GarminException.getMessage()` never has it, and `garminReply()` holds it. The CLI adds " Response: …" itself, so its output is unchanged. The tools and the log never show it. |
+| Token file problems | `TokenStore` threw `UncheckedIOException`, as other code can. Java's message for some causes (`AccessDeniedException`) is only the path. | `TokenStore` throws `TokenFileException` (still an `UncheckedIOException`, so the CLI is unchanged). The tools catch only that, and `explained()` adds the reason and what to do next. Any other `UncheckedIOException` is a bug. |
+| The log line | It named only the exception's class, so two different Garmin failures looked the same. | Owner's choice (30 October 2026): ``get_sleep failed in 4 ms: Not logged in. Run `stride-mcp login`.``, the message the AI got. Never Garmin's reply. A bug is still logged with its stack trace. |
+| The 404 wording | `GarminClient.activity` held the CLI's hint. | The client says only "No activity with id 123." The CLI adds "Check the id in `stride-mcp activities`." and the tool adds "Check the id with get_activities." |
+| The log file path | Worked out by `PrivateLogFile` and again for the bug message. | One helper, `PrivateLogFile.path`, so the message names the file that's written to. |
+| Server instructions | Some token file messages say to run `stride-mcp logout`, not only `login`. | Widened to "a `stride-mcp` command, such as `stride-mcp login`". |
+
+The last five rows came from a code review on 30 October 2026, before step 5 was committed.
 
 ## A process that keeps running
 
@@ -254,7 +275,7 @@ com.hammez.stride
 │   ├── McpStreams         stdin and the kept stdout, handed over by main
 │   └── PrivateLogFile     gets the log file ready (600, no links, kept small) before logging opens it
 ├── garmin/                unchanged, plus the 90-day limit in GarminDataConfig, and DayWeight (the weigh-ins the CLI and tools show), Units (durations, pace, labels), DEFAULT_RANGE_DAYS, DailySummary.isEmpty()
-└── garmin/auth/           unchanged
+└── garmin/auth/           unchanged, except TokenFileException, and Garmin's reply kept apart in GarminException (step 5)
 src/main/resources/
 ├── application.properties         + MCP server off
 ├── application-serve.properties   MCP server on (stdio), the log file
@@ -269,7 +290,7 @@ Against `FakeGarmin` and the phase 2 fixtures, as before. No real Garmin calls.
 |---|---|
 | Tools | Each tool's JSON from the fixtures (pinned, like `DataPrinterTest`). Defaults: last 7 days, today, last night. `type` and `refresh` passed on. Garmin's `0`s and missing values left out. `today` and `timeZone` in each reply. |
 | Inputs | Bad date, `from` after `to`, 91 days, missing `id`. Each one an error, with nothing sent to Garmin. |
-| Errors | Not logged in, session expired, 404, 429, `privacyProtected`, unexpected reply, an unexpected bug (message points to the log, with no details). No token in any reply or log line. |
+| Errors | Not logged in, session expired, 404, 403, 429, another HTTP error (without Garmin's reply), `privacyProtected`, unexpected reply, more than 200 activities, a token file problem (with the reason), an unexpected bug (message points to the log, with no details; also an `UncheckedIOException` that isn't the token file's, and a checked exception), a cache that can't be used (logged once per run, even when the problem changes). The CLI still shows Garmin's reply. Each an error result with exactly our text, said once. No token in any reply or log line. Over stdio: not logged in gives our text. |
 | Server over stdio | Start the server with piped streams, send `initialize`, `tools/list` and `tools/call`. Check the four tools, their descriptions and hints, and a real reply. **Every line on stdout is a JSON-RPC message.** A `println` from a tool doesn't reach stdout. |
 | Modes | CLI commands don't start the MCP server, and `login` still reads the paste. `serve` ends when stdin closes. |
 | Side by side | Several tool calls at once give the same answers as one at a time |
@@ -291,7 +312,7 @@ At the live check:
 2. ✅ **Dependencies and `serve`:** Spring Boot 4.1.2, Spring AI 2.0.2, webmvc and actuator dropped. `serve` mode with the server off elsewhere, stdout kept clean, logs to a file, waits until stdin closes. Settled: see [Settled in step 2](#settled-in-step-2-25-october-2026). Done 25 October 2026. Tests: a server with no tools answers `initialize` and `tools/list`, and stdout carries only JSON-RPC.
 3. ✅ **Shared rules:** the 90-day limit into `GarminDataConfig.MAX_RANGE_DAYS`, used by the CLI's check and usage text. `GarminClient.activities` refuses a bad range as a safety net. Done 25 October 2026. Tests: the CLI's wording is unchanged, and the client refuses 91 days or `from` after `to` with nothing sent to Garmin.
 4. ✅ **The tools and their replies** in `mcp/`, with descriptions. Settled: see [Settled in step 4](#settled-in-step-4-26-october-2026). Done 26 October 2026. Tests: each tool's JSON from the fixtures, the defaults, `type` and `refresh` passed on, Garmin's `0`s and missing values left out, each bad input refused with nothing sent to Garmin, and the four tools with their descriptions and hints in `tools/list` over stdio.
-5. **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Tests for each row of [Errors](#errors).
+5. ✅ **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Settled: see [Settled in step 5](#settled-in-step-5-29-october-2026). Done 29 October 2026. Tests: each row of [Errors](#errors), and not logged in over stdio.
 6. **End to end over stdio:** the piped-stream test, and the side-by-side test.
 7. **Docs:** [Running it](../running.md) gets the `serve` command. The quick start gets a short "Use it from an AI app" section. AGENTS.md status.
 8. **Live check** (owner): add stride-mcp to Claude Code (`claude mcp add stride -- java -jar …/stride-mcp.jar serve`), ask "how was my training this week?", then the questions in [What I should see](#what-i-should-see). Then the same in Codex CLI, since it must work with any MCP app.

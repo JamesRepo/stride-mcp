@@ -13,6 +13,7 @@ import java.time.ZoneOffset;
 import java.util.Base64;
 import java.util.List;
 
+import org.assertj.core.api.InstanceOfAssertFactories;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 
@@ -203,8 +204,10 @@ class DiTokenClientTest {
 
         Throwable thrown = catchThrowable(() -> client.refresh(saved("refresh-1")));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500");
-        assertThat(thrown.getMessage()).doesNotContain("refresh-1");
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500")
+                .hasMessageNotContaining("boom");
+        assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
+                .contains("boom").doesNotContain("refresh-1");
     }
 
     @Test
@@ -252,7 +255,10 @@ class DiTokenClientTest {
 
         Throwable thrown = catchThrowable(() -> client.refresh(saved("refresh-1")));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("invalid_request");
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 400")
+                .hasMessageNotContaining("invalid_request");
+        assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
+                .contains("invalid_request");
         assertNoSecrets(thrown);
     }
 
@@ -264,7 +270,11 @@ class DiTokenClientTest {
         return Base64.getEncoder().encodeToString((clientId + ":").getBytes(StandardCharsets.UTF_8));
     }
 
+    /** Neither the message nor Garmin's reply (which the CLI shows) has a secret. */
     private static void assertNoSecrets(Throwable thrown) {
-        assertThat(thrown.getMessage()).doesNotContain(TICKET).doesNotContain("secretticket").doesNotContain("refresh-1");
+        String reply = thrown instanceof GarminException e ? e.garminReply().orElse("") : "";
+        for (String text : List.of(thrown.getMessage(), reply)) {
+            assertThat(text).doesNotContain(TICKET).doesNotContain("secretticket").doesNotContain("refresh-1");
+        }
     }
 }

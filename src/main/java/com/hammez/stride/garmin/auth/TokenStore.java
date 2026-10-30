@@ -1,7 +1,6 @@
 package com.hammez.stride.garmin.auth;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.channels.FileChannel;
 import java.nio.channels.FileLock;
 import java.nio.file.AtomicMoveNotSupportedException;
@@ -72,7 +71,7 @@ public class TokenStore {
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't read the token file " + file, e);
+            throw new TokenFileException("Couldn't read the token file " + file, e, dir);
         }
     }
 
@@ -86,7 +85,7 @@ public class TokenStore {
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't save the token file " + file, e);
+            throw new TokenFileException("Couldn't save the token file " + file, e, dir);
         }
     }
 
@@ -105,12 +104,12 @@ public class TokenStore {
         } catch (UnsupportedOperationException e) {
             throw noUnixPermissions(e);
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't open the lock file " + lockFile, e);
+            throw new TokenFileException("Couldn't open the lock file " + lockFile, e, dir);
         }
         try (channel; FileLock lock = lockOrThrow(channel)) {
             return action.get();
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't release the lock file " + lockFile, e);
+            throw new TokenFileException("Couldn't release the lock file " + lockFile, e, dir);
         }
     }
 
@@ -119,7 +118,7 @@ public class TokenStore {
             // Waits while another stride-mcp process refreshes.
             return channel.lock();
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't lock the token file " + lockFile, e);
+            throw new TokenFileException("Couldn't lock the token file " + lockFile, e, dir);
         }
     }
 
@@ -128,7 +127,7 @@ public class TokenStore {
         try {
             return Files.deleteIfExists(file);
         } catch (IOException e) {
-            throw new UncheckedIOException("Couldn't delete the token file " + file, e);
+            throw new TokenFileException("Couldn't delete the token file " + file, e, dir);
         }
     }
 

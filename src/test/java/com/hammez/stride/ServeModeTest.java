@@ -29,7 +29,8 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * {@code serve} as an AI app runs it: a separate Java process, talked to over its stdin and stdout. Nothing here
- * talks to Garmin: the token file doesn't exist, and the only tool calls are refused for their input.
+ * talks to Garmin: the token file doesn't exist, so the tool calls are refused for their input or for not being
+ * logged in.
  */
 class ServeModeTest {
 
@@ -125,6 +126,27 @@ class ServeModeTest {
         String log = Files.readString(logFile());
         assertThat(log).containsPattern("get_sleep refused its input in \\d+ ms");
         assertThat(log).doesNotContain("yesterday");
+    }
+
+    @Test
+    void notLoggedInIsOurTextSaidOnce() throws Exception {
+        var server = start("serve");
+        server.send(INITIALIZE);
+        server.reply();
+        server.send(INITIALIZED);
+
+        server.send("""
+                {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sleep","arguments":{}}}""");
+        JsonNode result = server.reply().path("result");
+        server.closeStdin();
+        assertThat(server.exitCode()).isZero();
+
+        // Not Spring AI's default text, which said the message twice.
+        assertThat(result.path("isError").asBoolean()).isTrue();
+        assertThat(result.path("content")).hasSize(1);
+        assertThat(result.path("content").get(0).path("text").asString())
+                .isEqualTo("Not logged in. Run `stride-mcp login`.");
+        assertThat(Files.readString(logFile())).containsPattern("get_sleep failed in \\d+ ms: Not logged in\\. Run `stride-mcp login`\\.");
     }
 
     @Test

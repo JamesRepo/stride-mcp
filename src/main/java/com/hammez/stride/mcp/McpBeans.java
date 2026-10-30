@@ -1,6 +1,7 @@
 package com.hammez.stride.mcp;
 
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Profile;
@@ -23,9 +24,12 @@ class McpBeans {
         return new StdioServer(new JacksonMcpJsonMapper(json), streams);
     }
 
-    /** Spring AI's annotation scanner finds the {@code @McpTool} methods on this bean. */
+    /**
+     * Spring AI's annotation scanner finds the {@code @McpTool} methods on this bean. The log file is the one
+     * serve mode logs to (see {@link PrivateLogFile}), named in full so the owner can find it.
+     */
     @Bean
-    GarminTools garminTools(GarminClient garminClient) {
-        return new GarminTools(garminClient);
+    GarminTools garminTools(GarminClient garminClient, @Value("${logging.file.name}") String logFile) {
+        return new GarminTools(garminClient, PrivateLogFile.path(logFile).toString());
     }
 }
