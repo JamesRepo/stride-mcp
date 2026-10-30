@@ -9,6 +9,7 @@ import java.net.http.HttpClient;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -18,7 +19,12 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import com.sun.net.httpserver.Headers;
 import com.sun.net.httpserver.HttpServer;
@@ -28,6 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * A fake Garmin on localhost. Queue responses per path (and optionally per query), then check the requests
  * it received. Unqueued paths answer 500, so a test never silently passes on a missing response.
+ * Answers each request on its own thread, so requests sent at once are answered at once.
  * Public so tests of the layers above {@code garmin.auth} can use it through {@link #signedInApi}.
  */
 public final class FakeGarmin implements AutoCloseable {
@@ -72,7 +79,14 @@ public final class FakeGarmin implements AutoCloseable {
         }
     }
 
+    /** Requests to these paths wait until one to each has arrived. See {@link #together}. */
+    private record Together(Set<String> waiting, CountDownLatch arrived) {
+    }
+
     private final HttpServer server;
+    private final ExecutorService threads = Executors.newVirtualThreadPerTaskExecutor();
+    private volatile Together together;
+    private final Map<String, Duration> delays = new ConcurrentHashMap<>();
     private final Map<String, Deque<Queued>> responses = new ConcurrentHashMap<>();
     private final List<Request> requests = Collections.synchronizedList(new ArrayList<>());
 
@@ -88,7 +102,9 @@ public final class FakeGarmin implements AutoCloseable {
             var request = new Request(exchange.getRequestMethod(), path, exchange.getRequestURI().getRawQuery(),
                     exchange.getRequestHeaders(), body);
             requests.add(request);
-            Response response = next(path, request.queryParams());
+            pause(delays.get(path));
+            Response response = arrivedTogether(path) ? next(path, request.queryParams())
+                    : new Response(500, "{\"error\":\"not sent at the same time\"}");
             byte[] bytes = response.body().getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().add("Content-Type", "application/json");
             exchange.sendResponseHeaders(response.status(), bytes.length == 0 ? -1 : bytes.length);
@@ -97,7 +113,55 @@ public final class FakeGarmin implements AutoCloseable {
             }
             exchange.close();
         });
+        server.setExecutor(threads);
         server.start();
+    }
+
+    /**
+     * Holds the next request to each of these paths until one to every path has arrived, then answers them. If they
+     * don't all arrive within 10 seconds, the held ones answer 500. So a test can show requests were sent at the same
+     * time: sent one after another, the first would wait for a second that never comes.
+     */
+    public FakeGarmin together(String... paths) {
+        Set<String> waiting = ConcurrentHashMap.newKeySet();
+        waiting.addAll(List.of(paths));
+        together = new Together(waiting, new CountDownLatch(paths.length));
+        return this;
+    }
+
+    /**
+     * Answers every request to this path only after a pause. So a test can be sure that calls let go together are
+     * all waiting by the time the answer comes.
+     */
+    public FakeGarmin delay(String path, Duration pause) {
+        delays.put(path, pause);
+        return this;
+    }
+
+    private static void pause(Duration pause) {
+        if (pause == null) {
+            return;
+        }
+        try {
+            Thread.sleep(pause);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+    }
+
+    /** False if this request was held by {@link #together} and the others didn't come. */
+    private boolean arrivedTogether(String path) {
+        Together held = together;
+        if (held == null || !held.waiting().remove(path)) {
+            return true;
+        }
+        held.arrived().countDown();
+        try {
+            return held.arrived().await(10, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
     }
 
     /** Queues a response for the next request to this path (decoded, as Garmin sees it), whatever its query. */
@@ -111,7 +175,11 @@ public final class FakeGarmin implements AutoCloseable {
     }
 
     private FakeGarmin queue(String path, Map<String, String> query, int status, String body) {
-        responses.computeIfAbsent(path, p -> new ArrayDeque<>()).add(new Queued(query, new Response(status, body)));
+        Deque<Queued> queue = responses.computeIfAbsent(path, p -> new ArrayDeque<>());
+        // Requests may be taking from it on other threads (see next).
+        synchronized (queue) {
+            queue.add(new Queued(query, new Response(status, body)));
+        }
         return this;
     }
 
@@ -169,7 +237,15 @@ public final class FakeGarmin implements AutoCloseable {
 
     @Override
     public void close() {
+        // Let go of any request still held by together(), rather than wait out its 10 seconds.
+        Together held = together;
+        if (held != null) {
+            while (held.arrived().getCount() > 0) {
+                held.arrived().countDown();
+            }
+        }
         server.stop(0);
+        threads.close();
     }
 
     /** An unsigned JWT with the given claims, shaped like Garmin's access token. */

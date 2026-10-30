@@ -13,10 +13,10 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+import com.hammez.stride.concurrent.SingleFlight;
 import com.hammez.stride.garmin.GarminDataConfig.CacheLifetimes;
 import com.hammez.stride.garmin.auth.GarminApi;
 import com.hammez.stride.garmin.auth.GarminException;
@@ -47,16 +47,16 @@ public class GarminClient {
     private final ZoneId fallbackZone;
     private final boolean skipCache;
     /** Shared with the {@link #skippingCache()} view. */
-    private final AtomicReference<Remembered> remembered;
+    private final Memory remembered;
 
     /** @param fallbackZone for "today" if the Garmin profile has no time zone (the computer's) */
     public GarminClient(GarminApi api, GarminCache cache, GarminDataConfig config, JsonMapper json, Clock clock,
             ZoneId fallbackZone) {
-        this(api, cache, config, json, clock, fallbackZone, false, new AtomicReference<>());
+        this(api, cache, config, json, clock, fallbackZone, false, new Memory());
     }
 
     private GarminClient(GarminApi api, GarminCache cache, GarminDataConfig config, JsonMapper json, Clock clock,
-            ZoneId fallbackZone, boolean skipCache, AtomicReference<Remembered> remembered) {
+            ZoneId fallbackZone, boolean skipCache, Memory remembered) {
         this.api = api;
         this.cache = cache;
         this.config = config;
@@ -87,6 +87,12 @@ public class GarminClient {
 
     /** {@link Me}, and when it was looked up. */
     private record Remembered(Me me, Instant at) {
+    }
+
+    /** What this client remembers, and the one lookup that calls at the same time share. */
+    private static final class Memory {
+        private volatile Remembered me;
+        private final SingleFlight<Me> lookUp = new SingleFlight<>();
     }
 
     /**
@@ -290,18 +296,33 @@ public class GarminClient {
 
     /**
      * The display name and time zone. Remembered in memory for the profile's lifetime, so a run looks them up once,
-     * even if the cache can't be used or the time zone can't be read.
+     * even if the cache can't be used or the time zone can't be read. Calls at the same time (MCP tools) share one
+     * lookup, and its error if it fails, rather than each asking Garmin.
      */
     private Me me() {
+        Me known = rememberedMe();
+        return known != null ? known : remembered.lookUp.run(() -> {
+            // Another caller's lookup may have just finished.
+            Me again = rememberedMe();
+            if (again != null) {
+                return again;
+            }
+            Instant now = clock.instant();
+            Me me = lookUpMe();
+            remembered.me = new Remembered(me, now);
+            return me;
+        });
+    }
+
+    /** The remembered display name and time zone, or null if there are none, or they are too old. */
+    private Me rememberedMe() {
         Instant now = clock.instant();
-        Remembered known = remembered.get();
+        Remembered known = remembered.me;
         // A lookup "in the future" means the clock was turned back: look again.
         if (known != null && !now.isBefore(known.at()) && now.isBefore(known.at().plus(lifetimes().profile()))) {
             return known.me();
         }
-        Me me = lookUpMe();
-        remembered.set(new Remembered(me, now));
-        return me;
+        return null;
     }
 
     /** The display name and time zone, from the cache if they were fetched in the last week, otherwise Garmin. */

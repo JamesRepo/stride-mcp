@@ -3,9 +3,13 @@ package com.hammez.stride.garmin.auth;
 import java.time.Clock;
 import java.time.Instant;
 
+import com.hammez.stride.concurrent.SingleFlight;
+
 /**
  * Hands out working tokens, refreshing them shortly before they expire. Each load, refresh and save
  * happens under the token store's lock, so separate stride-mcp processes can't refresh at once.
+ * Within one process, calls at the same time (MCP tools) share one check: one refresh for all of them, and if it
+ * fails, its error, rather than a refresh each.
  */
 public class TokenManager {
 
@@ -13,6 +17,8 @@ public class TokenManager {
     private final DiTokenClient tokenClient;
     private final GarminAuthConfig config;
     private final Clock clock;
+    private final SingleFlight<Checked> check = new SingleFlight<>();
+    private final SingleFlight<GarminTokens> rejectedRefresh = new SingleFlight<>();
 
     public TokenManager(TokenStore store, DiTokenClient tokenClient, GarminAuthConfig config, Clock clock) {
         this.store = store;
@@ -38,30 +44,31 @@ public class TokenManager {
 
     /** As {@link #validTokens()}, but also says whether it just refreshed. */
     Checked checkedTokens() {
-        return store.underLock(() -> {
+        return check.run(() -> store.underLock(() -> {
             GarminTokens tokens = store.load().orElseThrow(NotLoggedInException::new);
             if (tokens.accessTokenExpiresAt().isAfter(clock.instant().plus(config.refreshMargin()))) {
                 return new Checked(tokens, false);
             }
             return new Checked(refreshAndSave(tokens), true);
-        });
+        }));
     }
 
     /**
      * Garmin turned down this access token before we expected (revoked early, or our clock is off).
-     * Refreshes once, unless another process has already saved newer tokens.
+     * Refreshes once, unless another process has already saved newer tokens. A call at the same time gets this
+     * call's result: the newer tokens either way.
      *
      * @throws NotLoggedInException    if the token file has gone
      * @throws SessionExpiredException if the refresh token has run out or is rejected
      */
     public GarminTokens refreshRejected(GarminTokens rejected) {
-        return store.underLock(() -> {
+        return rejectedRefresh.run(() -> store.underLock(() -> {
             GarminTokens tokens = store.load().orElseThrow(NotLoggedInException::new);
             if (!tokens.accessToken().equals(rejected.accessToken())) {
                 return tokens;
             }
             return refreshAndSave(tokens);
-        });
+        }));
     }
 
     private GarminTokens refreshAndSave(GarminTokens tokens) {

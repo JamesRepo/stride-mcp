@@ -1,6 +1,20 @@
 package com.hammez.stride.mcp;
 
 import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY;
+import static com.hammez.stride.mcp.ToolFixtures.DAY_WITH_TWO_WEIGH_INS;
+import static com.hammez.stride.mcp.ToolFixtures.LAST_NIGHT;
+import static com.hammez.stride.mcp.ToolFixtures.LAST_SEVEN_DAYS;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_FILE;
+import static com.hammez.stride.mcp.ToolFixtures.NOW;
+import static com.hammez.stride.mcp.ToolFixtures.PERSONAL;
+import static com.hammez.stride.mcp.ToolFixtures.SLEEP;
+import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
+import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
+import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
@@ -8,7 +22,6 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
-import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -59,18 +72,6 @@ import tools.jackson.databind.json.JsonMapper;
  * Every test also checks that no token shows up in any reply or log line.
  */
 class GarminToolsTest {
-
-    private static final Instant NOW = Instant.parse("2026-10-23T23:30:00Z");
-
-    // Decoded, as Garmin sees them. The fixture's display name is "jo runner".
-    private static final String PERSONAL = "/userprofile-service/userprofile/personal-information/jo runner";
-    private static final String ACTIVITIES = "/activitylist-service/activities/search/activities";
-    private static final String ACTIVITY = "/activity-service/activity/24816092240";
-    private static final String SPLITS = "/activity-service/activity/24816092240/splits";
-    private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
-    private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
-    private static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
-    private static final String LOG_FILE = "/Users/owner/.stride-mcp/stride-mcp.log";
 
     @TempDir
     Path temp;
@@ -172,36 +173,7 @@ class GarminToolsTest {
         assertThat(garmin.requests(ACTIVITIES).getFirst().queryParams())
                 .isEqualTo(Map.of("startDate", "2026-10-18", "endDate", "2026-10-24", "start", "0", "limit", "20"));
         // The fake answers with all 8, whatever the dates. Garmin's 0s (distance, speed, moving time) are left out.
-        assertThat(reply).isEqualTo(compact("""
-                {"today":"2026-10-24","timeZone":"Europe/London","from":"2026-10-18","to":"2026-10-24","count":8,
-                 "activities":[
-                  {"id":24816092240,"name":"Stair Stepper","type":"stair_climbing","start":"2026-10-22T17:04",
-                   "duration":"10:02","durationSeconds":602,"averageHeartRateBpm":142,"maxHeartRateBpm":158,
-                   "kilocalories":133},
-                  {"id":24815932306,"name":"Indoor Cycling","type":"indoor_cycling","start":"2026-10-22T16:53",
-                   "duration":"8:23","durationSeconds":503,"averageHeartRateBpm":120,"maxHeartRateBpm":151,
-                   "kilocalories":80},
-                  {"id":24810777073,"name":"Islington Running","type":"running","start":"2026-10-22T07:06",
-                   "distanceKm":5.05,"duration":"36:01","durationSeconds":2161,"movingDuration":"35:51",
-                   "movingDurationSeconds":2151,"pace":"7:08 /km","elevationGainMetres":18,"averageHeartRateBpm":143,
-                   "maxHeartRateBpm":169,"kilocalories":448},
-                  {"id":24801905256,"name":"Strength","type":"strength_training","start":"2026-10-21T11:48",
-                   "duration":"1:10:03","durationSeconds":4203,"movingDuration":"1:10:03",
-                   "movingDurationSeconds":4203,"averageHeartRateBpm":96,"maxHeartRateBpm":159,"kilocalories":334},
-                  {"id":24793573630,"name":"Strength","type":"strength_training","start":"2026-10-20T17:18",
-                   "duration":"55:59","durationSeconds":3359,"movingDuration":"55:59","movingDurationSeconds":3359,
-                   "averageHeartRateBpm":79,"maxHeartRateBpm":146,"kilocalories":175},
-                  {"id":24778243382,"name":"Strength","type":"strength_training","start":"2026-10-19T12:30",
-                   "duration":"1:11:52","durationSeconds":4312,"movingDuration":"1:11:52",
-                   "movingDurationSeconds":4312,"averageHeartRateBpm":93,"maxHeartRateBpm":166,"kilocalories":328},
-                  {"id":24765567036,"name":"Islington Running","type":"running","start":"2026-10-18T10:07",
-                   "distanceKm":8.01,"duration":"53:51","durationSeconds":3231,"movingDuration":"53:35",
-                   "movingDurationSeconds":3215,"pace":"6:43 /km","elevationGainMetres":30,"averageHeartRateBpm":149,
-                   "maxHeartRateBpm":164,"kilocalories":715},
-                  {"id":24755552155,"name":"Strength","type":"strength_training","start":"2026-10-17T11:46",
-                   "duration":"1:15:29","durationSeconds":4529,"movingDuration":"1:15:29",
-                   "movingDurationSeconds":4529,"averageHeartRateBpm":112,"maxHeartRateBpm":171,"kilocalories":502}]}
-                """));
+        assertThat(reply).isEqualTo(compact(LAST_SEVEN_DAYS));
     }
 
     @Test
@@ -277,13 +249,7 @@ class GarminToolsTest {
         String reply = ok("get_activity", Map.of("id", 24816092240L));
 
         // A stair stepper session: Garmin's 0 distance, speed and moving time are left out, for the lap too.
-        assertThat(reply).isEqualTo(compact("""
-                {"today":"2026-10-24","timeZone":"Europe/London","id":24816092240,"name":"Stair Stepper",
-                 "type":"stair_climbing","start":"2026-10-22T17:04","duration":"10:02","durationSeconds":602,
-                 "averageHeartRateBpm":142,"maxHeartRateBpm":158,"kilocalories":133,"aerobicTrainingEffect":2.0,
-                 "anaerobicTrainingEffect":0.0,"trainingLoad":22,
-                 "laps":[{"number":1,"duration":"10:02","durationSeconds":602,"averageHeartRateBpm":142,
-                   "maxHeartRateBpm":158}]}"""));
+        assertThat(reply).isEqualTo(compact(STAIR_STEPPER));
     }
 
     @Test
@@ -328,14 +294,7 @@ class GarminToolsTest {
         String reply = ok("get_daily_summary", Map.of("date", "2026-10-23"));
 
         // Intensity minutes of 0 are real values: only activities' 0s mean "doesn't apply". No sleep: get_sleep has it.
-        assertThat(reply).isEqualTo(compact("""
-                {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-23","recorded":true,"steps":3532,
-                 "stepGoal":11190,"distanceKm":3.18,"totalKilocalories":1417,"activeKilocalories":222,
-                 "restingHeartRateBpm":45,"minHeartRateBpm":43,"maxHeartRateBpm":130,"averageStressLevel":20,
-                 "bodyBatteryLowest":30,"bodyBatteryHighest":96,"moderateIntensityMinutes":0,
-                 "vigorousIntensityMinutes":2,"floorsClimbed":7,
-                 "weight":{"kilograms":75.4,"weighIns":2,"bmi":23.3,"bodyFatPercent":18.6,"bodyWaterPercent":55.1,
-                   "muscleMassKilograms":33.1,"boneMassKilograms":3.2}}"""));
+        assertThat(reply).isEqualTo(compact(DAY_WITH_TWO_WEIGH_INS));
         assertThat(garmin.requests(SLEEP)).isEmpty();
     }
 
@@ -393,12 +352,7 @@ class GarminToolsTest {
         String reply = ok("get_sleep", Map.of("date", "2026-10-23"));
 
         // Times in the profile's time zone (British Summer Time), not the computer's (UTC here).
-        assertThat(reply).isEqualTo(compact("""
-                {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-23","recorded":true,
-                 "start":"2026-10-22T22:37","end":"2026-10-23T07:37","asleep":"8:52:00","asleepSeconds":31920,
-                 "deepSleep":"1:31:00","deepSleepSeconds":5460,"lightSleep":"4:55:00","lightSleepSeconds":17700,
-                 "remSleep":"2:26:00","remSleepSeconds":8760,"awake":"0:08:00","awakeSeconds":480,"score":91,
-                 "quality":"Excellent","averageBreathsPerMinute":12.0,"averageSpo2Percent":97.0}"""));
+        assertThat(reply).isEqualTo(compact(LAST_NIGHT));
     }
 
     @Test
@@ -750,11 +704,6 @@ class GarminToolsTest {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> property(Tool tool, String name) {
         return (Map<String, Object>) ((Map<String, Object>) tool.inputSchema().get("properties")).get(name);
-    }
-
-    /** Pretty JSON as one line, keeping its field order, to compare with a reply. */
-    private String compact(String pretty) {
-        return json.writeValueAsString(json.readTree(pretty));
     }
 
     /** Queues the profile and its time zone (Europe/London) once. The cache keeps them after that. */

@@ -1,5 +1,19 @@
 package com.hammez.stride;
 
+import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY;
+import static com.hammez.stride.mcp.ToolFixtures.DAY_WITH_TWO_WEIGH_INS;
+import static com.hammez.stride.mcp.ToolFixtures.LAST_NIGHT;
+import static com.hammez.stride.mcp.ToolFixtures.LAST_SEVEN_DAYS;
+import static com.hammez.stride.mcp.ToolFixtures.NOW;
+import static com.hammez.stride.mcp.ToolFixtures.PERSONAL;
+import static com.hammez.stride.mcp.ToolFixtures.SLEEP;
+import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
+import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
+import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.BufferedReader;
@@ -10,9 +24,13 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Clock;
 import java.time.Duration;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -23,14 +41,21 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import com.hammez.stride.cli.StrideCommands;
+import com.hammez.stride.garmin.Fixtures;
+import com.hammez.stride.garmin.auth.FakeGarmin;
 
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
  * {@code serve} as an AI app runs it: a separate Java process, talked to over its stdin and stdout. Nothing here
- * talks to Garmin: the token file doesn't exist, so the tool calls are refused for their input or for not being
- * logged in.
+ * talks to the real Garmin. Most tests have no token file, so the tool calls are refused for their input or for not
+ * being logged in. The ones that need Garmin's replies get a {@link FakeGarmin} in this JVM, through
+ * {@link FakeGarminServe}, and its fake tokens.
+ * <p>
+ * Every process is also told to send http and https through a proxy that isn't there. If a test missed the fake,
+ * its calls to Garmin would fail instead of reaching it. The fake is on this computer, which Java never sends
+ * through a proxy (the default {@code http.nonProxyHosts}).
  */
 class ServeModeTest {
 
@@ -46,6 +71,7 @@ class ServeModeTest {
     Path temp;
 
     private final JsonMapper json = JsonMapper.builder().build();
+    private final FakeGarmin garmin = new FakeGarmin();
     private Process process;
 
     @AfterEach
@@ -53,6 +79,7 @@ class ServeModeTest {
         if (process != null) {
             process.destroyForcibly();
         }
+        garmin.close();
     }
 
     @Test
@@ -89,10 +116,7 @@ class ServeModeTest {
         assertThat(server.exitCode()).isZero();
 
         // Every line on stdout was a JSON-RPC message. The stray println went to stderr, the warning to the log.
-        for (String line : server.stdout()) {
-            assertThat(json.readTree(line).path("jsonrpc").asString()).as(line).isEqualTo("2.0");
-        }
-        assertThat(server.stdout()).hasSize(2);
+        assertOnlyJsonRpcOnStdout(server, 2);
         assertThat(server.stderr()).contains(NoisyStartup.PRINTED).doesNotContain(NoisyStartup.LOGGED);
         assertThat(Files.readString(logFile())).contains(NoisyStartup.LOGGED);
     }
@@ -147,6 +171,96 @@ class ServeModeTest {
         assertThat(result.path("content").get(0).path("text").asString())
                 .isEqualTo("Not logged in. Run `stride-mcp login`.");
         assertThat(Files.readString(logFile())).containsPattern("get_sleep failed in \\d+ ms: Not logged in\\. Run `stride-mcp login`\\.");
+    }
+
+    @Test
+    void aToolCallGetsGarminsReplyAndAPrintlnDuringItCantBreakTheConnection() throws Exception {
+        garmin.respond(PROFILE_PATH, 200, Fixtures.read("social-profile.json"))
+                .respond(PERSONAL, 200, Fixtures.read("personal-information.json"))
+                .respond(SLEEP, Map.of("date", "2026-10-23", "nonSleepBufferMinutes", "60"), 200,
+                        Fixtures.read("sleep-last-night.json"));
+        var server = startWithFakeGarmin();
+        server.send(INITIALIZE);
+        server.reply();
+        server.send(INITIALIZED);
+
+        // The clock prints each time a tool reads it.
+        server.send("""
+                {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_sleep",\
+                "arguments":{"date":"2026-10-23"}}}""");
+        JsonNode sleep = server.reply();
+        // Still working after the println.
+        server.send(TOOLS_LIST);
+        JsonNode toolsList = server.reply();
+        server.closeStdin();
+        assertThat(server.exitCode()).isZero();
+
+        assertThat(sleep.path("id").asInt()).isEqualTo(3);
+        assertThat(sleep.path("result").path("isError").asBoolean()).isFalse();
+        // The same reply GarminToolsTest pins for this call.
+        assertThat(text(sleep)).isEqualTo(compact(LAST_NIGHT));
+        assertThat(garmin.requests(SLEEP)).singleElement().satisfies(request -> assertThat(
+                request.header("Authorization")).isEqualTo("Bearer " + FakeGarmin.ACCESS_TOKEN));
+        assertThat(toolsList.path("id").asInt()).isEqualTo(2);
+        assertThat(toolsList.path("result").path("tools")).hasSize(4);
+
+        assertOnlyJsonRpcOnStdout(server, 3);
+        assertThat(server.stderr()).contains(FakeGarminServe.PRINTED);
+        assertThat(Files.readString(logFile())).containsPattern("get_sleep worked in \\d+ ms");
+        assertNoTokens(server);
+    }
+
+    @Test
+    void toolCallsSentTogetherRunAtOnceAndEachReplyHasItsRequestsId() throws Exception {
+        garmin.respond(PROFILE_PATH, 200, Fixtures.read("social-profile.json"))
+                .respond(PERSONAL, 200, Fixtures.read("personal-information.json"))
+                .respond(ACTIVITIES, 200, Fixtures.read("activities.json"))
+                .respond(ACTIVITY, 200, Fixtures.read("activity.json"))
+                .respond(SPLITS, 200, Fixtures.read("activity-splits.json"))
+                .respond(SUMMARY, 200, Fixtures.read("summary-today.json"))
+                .respond(WEIGHT_PATH + "2026-10-23", 200, Fixtures.TWO_WEIGH_INS)
+                .respond(SLEEP, 200, Fixtures.read("sleep-last-night.json"))
+                // Answered one after another, the first of these would wait for the other until it gave up.
+                .together(SUMMARY, SLEEP);
+        var server = startWithFakeGarmin();
+        server.send(INITIALIZE);
+        server.reply();
+        server.send(INITIALIZED);
+
+        // All four sent before any reply is read, as an AI app may. Each reply is the one GarminToolsTest pins.
+        var expected = Map.of(
+                10, LAST_SEVEN_DAYS,
+                11, STAIR_STEPPER,
+                12, DAY_WITH_TWO_WEIGH_INS,
+                13, LAST_NIGHT);
+        server.send("""
+                {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_activities","arguments":{}}}""");
+        server.send("""
+                {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"get_activity",\
+                "arguments":{"id":24816092240}}}""");
+        server.send("""
+                {"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"get_daily_summary",\
+                "arguments":{"date":"2026-10-23"}}}""");
+        server.send("""
+                {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_sleep",\
+                "arguments":{"date":"2026-10-23"}}}""");
+        // In whatever order they finish. Wait for all of them before closing stdin: the SDK drops the rest.
+        var replies = new HashMap<Integer, String>();
+        for (int i = 0; i < expected.size(); i++) {
+            JsonNode reply = server.reply();
+            assertThat(reply.path("result").path("isError").asBoolean()).as(reply.toString()).isFalse();
+            replies.put(reply.path("id").asInt(), text(reply));
+        }
+        server.closeStdin();
+        assertThat(server.exitCode()).isZero();
+
+        assertThat(replies).containsOnlyKeys(expected.keySet());
+        expected.forEach((id, pinned) -> assertThat(replies.get(id)).as("reply %d", id).isEqualTo(compact(pinned)));
+        // One profile lookup for all four: the display name and the time zone, asked for once each.
+        assertThat(garmin.requests(PROFILE_PATH)).hasSize(1);
+        assertThat(garmin.requests(PERSONAL)).hasSize(1);
+        assertOnlyJsonRpcOnStdout(server, 5);
+        assertNoTokens(server);
     }
 
     @Test
@@ -214,17 +328,59 @@ class ServeModeTest {
         return temp.resolve("home/.stride-mcp/stride-mcp.log");
     }
 
+    /**
+     * {@code serve} with every Garmin address on {@link #garmin}, signed in with its fake tokens, and its clock
+     * stopped at {@link com.hammez.stride.mcp.ToolFixtures#NOW}, as in the tool tests.
+     */
+    private Server startWithFakeGarmin() throws IOException {
+        // Good for another hour at NOW, so no refresh.
+        garmin.signedInApi(tokenFile(), Clock.fixed(NOW, ZoneOffset.UTC));
+        return start("serve", "--spring.main.sources=" + FakeGarminServe.class.getName(),
+                "--stride.test.fake-garmin=" + garmin.config().connectApiBaseUrl(),
+                "--stride.test.now=" + NOW);
+    }
+
+    private Path tokenFile() {
+        return temp.resolve("home/.stride-mcp/garmin_tokens.json");
+    }
+
+    /** Waits for the end of stdout, then checks it had exactly this many lines, each a JSON-RPC message. */
+    private void assertOnlyJsonRpcOnStdout(Server server, int lines) throws InterruptedException {
+        for (String line : server.stdout()) {
+            assertThat(json.readTree(line).path("jsonrpc").asString()).as(line).isEqualTo("2.0");
+        }
+        assertThat(server.stdout()).hasSize(lines);
+    }
+
+    /** No fake token on stdout, stderr or in the log. Call once the server has ended. */
+    private void assertNoTokens(Server server) throws Exception {
+        for (String output : List.of(String.join("\n", server.stdout()), server.stderr(),
+                Files.readString(logFile()))) {
+            assertThat(output).doesNotContain(FakeGarmin.ACCESS_TOKEN).doesNotContain(FakeGarmin.REFRESH_TOKEN);
+        }
+    }
+
+    /** A tools/call reply's one text. */
+    private static String text(JsonNode reply) {
+        JsonNode content = reply.path("result").path("content");
+        assertThat(content).hasSize(1);
+        return content.get(0).path("text").asString();
+    }
+
     private Server start(String... args) throws IOException {
         Path home = temp.resolve("home");
         var command = new ArrayList<>(List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-Duser.home=" + home,
+                // A proxy nothing listens on: any https call, and any http call off this computer, fails.
+                "-Dhttps.proxyHost=127.0.0.1", "-Dhttps.proxyPort=1",
+                "-Dhttp.proxyHost=127.0.0.1", "-Dhttp.proxyPort=1",
                 "-cp", System.getProperty("java.class.path"),
                 StrideMcpApplication.class.getName()));
         command.addAll(List.of(args));
         // Every file under the temp folder, even if a default changes.
         command.addAll(List.of("--stride.log-file=" + logFile(),
-                "--stride.token-file=" + home.resolve(".stride-mcp/garmin_tokens.json"),
+                "--stride.token-file=" + tokenFile(),
                 "--stride.cache-dir=" + home.resolve(".stride-mcp/cache")));
         process = new ProcessBuilder(command).start();
         return new Server(process);

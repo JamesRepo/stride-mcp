@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Step 5 (errors) done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026). Next: step 6, end to end over stdio._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Step 5 (errors) done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026). Step 6 (end to end over stdio) done 30 October 2026: see [Settled in step 6](#settled-in-step-6-30-october-2026). Next: step 7, docs._
 
 ## What changes
 
@@ -239,6 +239,42 @@ Only one phase 2 message mentioned a CLI command the AI can't use: the 404's "Ch
 
 The last five rows came from a code review on 30 October 2026, before step 5 was committed.
 
+## Settled in step 6 (30 October 2026)
+
+### Two tool calls at once
+
+Found by reading the MCP Java SDK 2.1.0's and Spring AI 2.0.2's source, then checked with tests.
+
+| Question | Answer |
+|---|---|
+| Does the server run two `tools/call` requests at once? | **Yes.** The stdio transport reads stdin on one thread and hands each message on with `flatMap`, which runs up to 256 at once. The SDK runs each call of a sync tool on Reactor's `boundedElastic` threads (at most 10 per CPU core; any more wait their turn). |
+| Could a setting make them wait their turn? | Yes: the SDK's `immediateExecution`. Spring AI 2.0.2 turns it on only in a servlet web app. We have no web server (`web-application-type=none`), so it stays off. **Phase 5 (hosted) adds a web server: check this again then.** |
+| In what order do replies come? | As each call finishes, not as they were sent. One thread writes them, one whole line each. Each has its request's `id`, which is how the AI app matches them. |
+
+What it means for an AI app that sends calls in parallel: they run in parallel here too, and Garmin gets their requests at the same time. Spreading requests out is still phase 4.
+
+What it changed:
+
+| Found | Fix |
+|---|---|
+| `GarminClient` remembered the profile (`displayName` and time zone) safely, but not only once. Several first calls at once each asked Garmin for it. | The lookup is shared (owner's choice). |
+| A first fix used a lock. A code review (30 October 2026) found that callers waiting on the lock each tried again when the lookup failed: after a 429, one more request to Garmin per waiting call, one after another, each with its own timeout. The token refresh had the same flaw: the token store's lock only shared a refresh that worked. | `concurrent/SingleFlight` (owner's choice): callers that arrive while a lookup or token check is running wait for it, then get its result or its error. Nothing is kept once it finishes, so errors are still never cached, and the next call tries again. Used by `GarminClient`'s profile lookup and by `TokenManager`'s token check and refresh after a 401. |
+
+So a 429, a 403 or a rejected refresh reaches Garmin once, however many calls were waiting. Tests cover each, plus not logged in.
+
+### How the stdio tests reach a fake Garmin
+
+| Question | Answer | What we did |
+|---|---|---|
+| Can a test replace the `GarminAuthConfig` bean in the `serve` process? | Not by name: bean overriding is off in Spring Boot 4.1, and the app would refuse to start. But everything that uses it asks by type, so an extra bean marked `@Primary` wins. | `FakeGarminServe` (test code only) adds a `@Primary` config with every address on FakeGarmin, and a `@Primary` stopped clock. The test passes it with `--spring.main.sources`, as `NoisyStartup` is. It refuses any address that isn't this computer. No production setting can change Garmin's addresses (owner's choice). |
+| Not `@Configuration`? | That is a `@Component`, so the app's component scan found it in every test. Spring still reads the `@Bean` methods of a class it's given as a source. | A plain class |
+| What if a test forgets the fake? | It would call the real Garmin. | Every `serve` process the tests start is told to use an http and https proxy that isn't there. Java's `HttpClient` honours this (checked in JDK 25's source, and by a quick run). The fake is on this computer, which Java never sends through a proxy. |
+| A `println` during a tool call | The stopped clock prints each time it's read, and the tools read it on every call. | It lands on stderr. The connection keeps working. |
+
+How the tests show calls really ran at once: FakeGarmin holds a summary request and a sleep request until both have arrived. Run one after another, the first would wait for a second that never comes. Checked by forcing `immediateExecution` on: the test failed.
+
+The tests compare replies with the ones `GarminToolsTest` pins. Those replies now live in `ToolFixtures`, shared by the three test classes.
+
 ## A process that keeps running
 
 The CLI runs for a second. The server runs as long as the AI app does. What that changes:
@@ -250,7 +286,7 @@ The CLI runs for a second. The server runs as long as the AI app does. What that
 | Cache | Disk files, read on each call, as in phase 2. No memory cache yet: the files are small and local. Phase 4 adds one if it's needed. |
 | `displayName` and time zone | Remembered in memory for 7 days, as in phase 2 |
 | Switching Garmin account | `logout`, `login`, then restart the AI app, so the server forgets the old account's `displayName` |
-| Two tool calls at once | Possible. `GarminClient`'s memory is an `AtomicReference`, the token store is locked, and cache writes are atomic. A test runs calls side by side to be sure. |
+| Two tool calls at once | They run at the same time (checked 30 October 2026: see [Settled in step 6](#settled-in-step-6-30-october-2026)). Safe: calls at once share one token check (so one refresh) and one profile lookup, and share its error if it fails. The token file's lock still keeps other stride-mcp processes out. Cache writes are atomic. Tests run calls side by side. |
 
 ## Shared rules, one place
 
@@ -274,6 +310,7 @@ com.hammez.stride
 │   ├── StdioServer        the SDK's stdio transport on the kept stdout, and a wait until it closes
 │   ├── McpStreams         stdin and the kept stdout, handed over by main
 │   └── PrivateLogFile     gets the log file ready (600, no links, kept small) before logging opens it
+├── concurrent/            SingleFlight: calls at once share one profile lookup or token check (step 6)
 ├── garmin/                unchanged, plus the 90-day limit in GarminDataConfig, and DayWeight (the weigh-ins the CLI and tools show), Units (durations, pace, labels), DEFAULT_RANGE_DAYS, DailySummary.isEmpty()
 └── garmin/auth/           unchanged, except TokenFileException, and Garmin's reply kept apart in GarminException (step 5)
 src/main/resources/
@@ -293,7 +330,7 @@ Against `FakeGarmin` and the phase 2 fixtures, as before. No real Garmin calls.
 | Errors | Not logged in, session expired, 404, 403, 429, another HTTP error (without Garmin's reply), `privacyProtected`, unexpected reply, more than 200 activities, a token file problem (with the reason), an unexpected bug (message points to the log, with no details; also an `UncheckedIOException` that isn't the token file's, and a checked exception), a cache that can't be used (logged once per run, even when the problem changes). The CLI still shows Garmin's reply. Each an error result with exactly our text, said once. No token in any reply or log line. Over stdio: not logged in gives our text. |
 | Server over stdio | Start the server with piped streams, send `initialize`, `tools/list` and `tools/call`. Check the four tools, their descriptions and hints, and a real reply. **Every line on stdout is a JSON-RPC message.** A `println` from a tool doesn't reach stdout. |
 | Modes | CLI commands don't start the MCP server, and `login` still reads the paste. `serve` ends when stdin closes. |
-| Side by side | Several tool calls at once give the same answers as one at a time |
+| Side by side | Several tool calls at once give the same answers as one at a time: one token refresh, one profile lookup, whole cache files. When the refresh or the lookup fails (429, 403, rejected refresh), each call gets the error and Garmin is asked once. Over stdio: replies match their requests by `id`, whatever order they come in. |
 
 ## What I should see
 
@@ -313,7 +350,7 @@ At the live check:
 3. ✅ **Shared rules:** the 90-day limit into `GarminDataConfig.MAX_RANGE_DAYS`, used by the CLI's check and usage text. `GarminClient.activities` refuses a bad range as a safety net. Done 25 October 2026. Tests: the CLI's wording is unchanged, and the client refuses 91 days or `from` after `to` with nothing sent to Garmin.
 4. ✅ **The tools and their replies** in `mcp/`, with descriptions. Settled: see [Settled in step 4](#settled-in-step-4-26-october-2026). Done 26 October 2026. Tests: each tool's JSON from the fixtures, the defaults, `type` and `refresh` passed on, Garmin's `0`s and missing values left out, each bad input refused with nothing sent to Garmin, and the four tools with their descriptions and hints in `tools/list` over stdio.
 5. ✅ **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Settled: see [Settled in step 5](#settled-in-step-5-29-october-2026). Done 29 October 2026. Tests: each row of [Errors](#errors), and not logged in over stdio.
-6. **End to end over stdio:** the piped-stream test, and the side-by-side test.
+6. ✅ **End to end over stdio:** the piped-stream test, and the side-by-side test. Settled: see [Settled in step 6](#settled-in-step-6-30-october-2026). Done 30 October 2026. Tests: a `tools/call` over stdio gets FakeGarmin's reply, the same as `GarminToolsTest` pins; a `println` during a call goes to stderr; calls at once give the same replies as one at a time, with one token refresh and one profile lookup, in the tools and over stdio; when either fails, Garmin is asked once.
 7. **Docs:** [Running it](../running.md) gets the `serve` command. The quick start gets a short "Use it from an AI app" section. AGENTS.md status.
 8. **Live check** (owner): add stride-mcp to Claude Code (`claude mcp add stride -- java -jar …/stride-mcp.jar serve`), ask "how was my training this week?", then the questions in [What I should see](#what-i-should-see). Then the same in Codex CLI, since it must work with any MCP app.
 
