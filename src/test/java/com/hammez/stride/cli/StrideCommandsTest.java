@@ -151,37 +151,70 @@ class StrideCommandsTest {
     @Test
     void capturePrintsWhereTheFilesWentAndTheReminder() {
         Path folder = temp.resolve("samples");
+        int exit;
         try (var garmin = new FakeGarmin()) {
-            String daily = "/usersummary-service/usersummary/daily/jo";
-            String sleep = "/wellness-service/wellness/dailySleepData/jo";
-            garmin.respond(FakeGarmin.PROFILE_PATH, 200, "{\"displayName\":\"jo\"}")
-                    .respond("/userprofile-service/userprofile/personal-information/jo", 200, "{}")
-                    .respond("/activitylist-service/activities/search/activities", 200, "[]")
-                    .respond("/activitylist-service/activities/search/activities", 200, "[]")
-                    .respond("/activity-service/activity/1", 404, "")
-                    .respond(daily, 200, "{}").respond(daily, 200, "{}")
-                    .respond(sleep, 200, "{}").respond(sleep, Map.of("date", "2000-01-01", "nonSleepBufferMinutes", "60"),
-                            204, "")
-                    .respond("/weight-service/weight/dayview/2026-10-23", 200, "{\"dateWeightList\":[]}")
-                    .respond("/weight-service/weight/dayview/2000-01-01", 200, "{\"dateWeightList\":[]}");
-            Clock clock = Clock.fixed(Instant.parse("2026-10-23T12:00:00Z"), ZoneOffset.UTC);
-            var samples = new GarminSamples(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
-                    GarminDataConfig.defaults(garmin.config()), json, clock, ZoneOffset.UTC);
-            var capture = new StrideCommands(null, samples, null, null, io(), ZoneOffset.UTC);
-
-            assertThat(capture.run(List.of("capture", folder.toString()))).isZero();
+            exit = capture(garmin, folder);
         }
 
+        assertThat(exit).isZero();
         assertThat(out()).contains(
-                "Saved 11 files to " + folder + ":",
+                "Saved 15 files to " + folder + ":",
                 "  activity-not-found.json      HTTP 404",
                 "  sleep-none.json              HTTP 204",
                 "  weight-none.json             HTTP 200",
+                "  activity-types.json          HTTP 200",
                 "No activities in the last 7 days",
                 "These files hold personal data",
                 "docs/phases/phase-2-data.md (\"Getting real samples\")")
                 .doesNotContain(FakeGarmin.ACCESS_TOKEN).doesNotContain(FakeGarmin.REFRESH_TOKEN);
         assertThat(err()).isEmpty();
+    }
+
+    @Test
+    void captureSavesEverythingButExitsWithAnErrorWhenANewCallFails() {
+        Path folder = temp.resolve("samples");
+        int exit;
+        try (var garmin = new FakeGarmin()) {
+            garmin.respond("/sleep-service/stats/sleep/daily/2026-09-26/2026-10-23", 404, "");
+            exit = capture(garmin, folder);
+        }
+
+        assertThat(exit).isEqualTo(1);
+        assertThat(out()).contains(
+                "Saved 15 files to " + folder + ":",
+                "  sleep-range.json             HTTP 404",
+                "  activity-types.json          HTTP 200",
+                "These files hold personal data");
+        assertThat(err()).contains(
+                "Capture finished, but 1 of the new calls didn't work. Their files are saved too, so send them as well:",
+                "  sleep-range.json: Garmin has nothing at /sleep-service/stats/sleep/daily/2026-09-26/2026-10-23 "
+                        + "(HTTP 404).");
+        assertThat(folder.resolve("sleep-range.json")).exists();
+    }
+
+    /** Runs capture against a fake Garmin with a whole run's replies queued after any already there. */
+    private int capture(FakeGarmin garmin, Path folder) {
+        String daily = "/usersummary-service/usersummary/daily/jo";
+        String sleep = "/wellness-service/wellness/dailySleepData/jo";
+        garmin.respond(FakeGarmin.PROFILE_PATH, 200, "{\"displayName\":\"jo\"}")
+                .respond("/userprofile-service/userprofile/personal-information/jo", 200, "{}")
+                .respond("/activitylist-service/activities/search/activities", 200, "[]")
+                .respond("/activitylist-service/activities/search/activities", 200, "[]")
+                .respond("/activity-service/activity/1", 404, "")
+                .respond(daily, 200, "{}").respond(daily, 200, "{}")
+                .respond(sleep, 200, "{}").respond(sleep, Map.of("date", "2000-01-01", "nonSleepBufferMinutes", "60"),
+                        204, "")
+                .respond("/weight-service/weight/dayview/2026-10-23", 200, "{\"dateWeightList\":[]}")
+                .respond("/weight-service/weight/dayview/2000-01-01", 200, "{\"dateWeightList\":[]}")
+                .respond("/weight-service/weight/range/2026-09-24/2026-10-23", 200, "{}")
+                .respond("/usersummary-service/v2/dailysummaries", 200, "[]")
+                .respond("/sleep-service/stats/sleep/daily/2026-09-26/2026-10-23", 200, "{}")
+                .respond("/activity-service/activity/activityTypes", 200, "[]");
+        Clock clock = Clock.fixed(Instant.parse("2026-10-23T12:00:00Z"), ZoneOffset.UTC);
+        var samples = new GarminSamples(garmin.signedInApi(temp.resolve("garmin_tokens.json"), clock),
+                GarminDataConfig.defaults(garmin.config()), json, clock, ZoneOffset.UTC);
+        return new StrideCommands(null, samples, null, null, io(), ZoneOffset.UTC)
+                .run(List.of("capture", folder.toString()));
     }
 
     @Test

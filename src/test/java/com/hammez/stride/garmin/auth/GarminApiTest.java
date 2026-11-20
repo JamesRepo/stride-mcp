@@ -139,7 +139,8 @@ class GarminApiTest {
 
         Throwable thrown = catchThrowable(() -> api.get(PATH, Map.of()));
 
-        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasMessageContaining("HTTP 500");
+        assertThat(thrown).isExactlyInstanceOf(UnexpectedStatusException.class).hasMessageContaining("HTTP 500");
+        assertThat(((UnexpectedStatusException) thrown).status()).isEqualTo(500);
         assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
                 .contains("seen").doesNotContain("old-opaque-token").doesNotContain(fresh);
     }
@@ -209,8 +210,9 @@ class GarminApiTest {
         Throwable thrown = catchThrowable(() -> api.get(PATH, Map.of()));
 
         // The snippet is Garmin's reply, kept apart from the message: the CLI shows it, the MCP tools don't.
-        assertThat(thrown).isExactlyInstanceOf(GarminException.class)
+        assertThat(thrown).isExactlyInstanceOf(UnexpectedStatusException.class)
                 .hasMessage("Garmin returned HTTP 503 during the request to " + PATH + ". Try again later.");
+        assertThat(((UnexpectedStatusException) thrown).status()).isEqualTo(503);
         assertThat(((GarminException) thrown).garminReply()).get(InstanceOfAssertFactories.STRING)
                 .contains("down").doesNotContain(access).doesNotContain("eyJ");
         assertThat(garmin.requests()).hasSize(1);

@@ -59,7 +59,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery, the sleep
                                 that ended that morning, and weight and body composition. Default today.
               sleep [date]      The night that ended on that morning. Default last night.
-              capture <folder>  Save Garmin's raw replies (about 13 requests, once each) to files in a new
+              capture <folder>  Save Garmin's raw replies (about 17 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
               serve             Start the MCP server, over stdin and stdout. An AI app runs this, not you.
 
@@ -352,6 +352,12 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         io.out().println();
         io.out().println("These files hold personal data: names, ids, heart rate, GPS start points, devices.");
         io.out().println("Before sending them, strip them using " + CHECKLIST + ".");
+        if (!capture.failures().isEmpty()) {
+            // Exit code 1, with what went wrong on stderr. The files are still saved, so send them too.
+            throw new GarminException("Capture finished, but " + capture.failures().size() + " of the new calls didn't "
+                    + "work. Their files are saved too, so send them as well:" + System.lineSeparator() + "  "
+                    + String.join(System.lineSeparator() + "  ", capture.failures()));
+        }
     }
 
     private void printSession(WhoAmI me) {

@@ -109,7 +109,7 @@ public class GarminApi {
         if (status == 429) {
             throw new RateLimitedException();
         }
-        throw GarminHttp.unexpected(step, response, accessTokens);
+        throw GarminHttp.unexpectedData(step, response, accessTokens);
     }
 
     /** The full address. Query keys are sorted so the same request always has the same address. */

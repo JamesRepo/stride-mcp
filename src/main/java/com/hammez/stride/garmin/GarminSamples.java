@@ -19,6 +19,7 @@ import com.hammez.stride.files.PrivateFolder;
 import com.hammez.stride.garmin.auth.GarminApi;
 import com.hammez.stride.garmin.auth.GarminException;
 import com.hammez.stride.garmin.auth.NotFoundException;
+import com.hammez.stride.garmin.auth.UnexpectedStatusException;
 
 import tools.jackson.core.JacksonException;
 import tools.jackson.databind.JsonNode;
@@ -29,6 +30,10 @@ import tools.jackson.databind.node.ObjectNode;
  * The {@code capture} command's calls: saves Garmin's raw replies to files, to turn into test fixtures.
  * Each request is made once, with no cache and no retries. Each file holds the HTTP status and the reply
  * body, never headers or tokens.
+ * <p>
+ * The last four calls (the range calls and the activity types, added 20 November 2026 for phases 4a and 4b) are
+ * replies nobody has seen yet. So they're saved raw, never parsed, and one of them failing doesn't stop the others:
+ * it goes in {@link Capture#failures()}.
  */
 public class GarminSamples {
 
@@ -45,11 +50,23 @@ public class GarminSamples {
     static final String SLEEP_NONE = "sleep-none.json";
     static final String WEIGHT_TODAY = "weight-today.json";
     static final String WEIGHT_NONE = "weight-none.json";
+    static final String WEIGHT_RANGE = "weight-range.json";
+    static final String SUMMARY_RANGE = "summary-range.json";
+    static final String SLEEP_RANGE = "sleep-range.json";
+    static final String ACTIVITY_TYPES = "activity-types.json";
 
     /** Every file capture can write, in the order it writes them. */
     static final List<String> FILES = List.of(SOCIAL_PROFILE, PERSONAL_INFORMATION, ACTIVITIES, ACTIVITIES_EMPTY,
             ACTIVITY, ACTIVITY_SPLITS, ACTIVITY_NOT_FOUND, SUMMARY_TODAY, SUMMARY_PAST, SLEEP_LAST_NIGHT, SLEEP_NONE,
-            WEIGHT_TODAY, WEIGHT_NONE);
+            WEIGHT_TODAY, WEIGHT_NONE, WEIGHT_RANGE, SUMMARY_RANGE, SLEEP_RANGE, ACTIVITY_TYPES);
+
+    /** Days in {@link #WEIGHT_RANGE}, today included: phase 4a's default range. */
+    static final int WEIGHT_RANGE_DAYS = 30;
+    /**
+     * Days in {@link #SUMMARY_RANGE} and {@link #SLEEP_RANGE}, today included: Garmin's limit for the sleep stats
+     * (python-garminconnect's {@code get_sleep_daily}, checked 20 November 2026).
+     */
+    static final int DAILY_RANGE_DAYS = 28;
 
     /** A day long before Garmin Connect existed, so it should have no data. */
     private static final LocalDate EMPTY_DAY = LocalDate.of(2000, 1, 1);
@@ -75,13 +92,21 @@ public class GarminSamples {
     public record Saved(String file, int status) {
     }
 
-    /** What a capture saved, and anything the user should know about it (such as skipped calls). */
-    public record Capture(Path folder, List<Saved> saved, List<String> notes) {
+    /**
+     * What a capture saved, and anything the user should know about it (such as skipped calls).
+     *
+     * @param failures the new calls that didn't get a 200 with JSON, one line each, naming the file. Their files are
+     *                 still saved. Empty if they all worked.
+     */
+    public record Capture(Path folder, List<Saved> saved, List<String> notes, List<String> failures) {
     }
 
     /**
      * Makes the capture calls in order and saves one file per reply.
-     * A 404 or an empty reply is saved and the run carries on. Any other error stops the run at once.
+     * A 404 or an empty reply is saved and the run carries on. For the new calls (see the class comment), so is
+     * any other HTTP error in Garmin's reply but 401, 403 and 429, and each of these, or a 200 that isn't JSON, is
+     * listed in {@link Capture#failures()}. Any other error stops the run at once, including a failed token refresh
+     * during a new call: it would fail again on the next one.
      *
      * @param folder created {@code 700} when the first file is saved, if it doesn't exist. An existing folder must
      *               already be {@code 700} and hold no samples from an earlier run.
@@ -103,7 +128,7 @@ public class GarminSamples {
         } catch (GarminException | UncheckedIOException e) {
             throw run.stopped(e);
         }
-        return new Capture(out.dir(), List.copyOf(run.saved), List.copyOf(run.notes));
+        return new Capture(out.dir(), List.copyOf(run.saved), List.copyOf(run.notes), List.copyOf(run.failures));
     }
 
     /**
@@ -159,8 +184,11 @@ public class GarminSamples {
         private final PrivateFolder out;
         private final List<Saved> saved = new ArrayList<>();
         private final List<String> notes = new ArrayList<>();
+        private final List<String> failures = new ArrayList<>();
         /** The file being fetched, or null between files. */
         private String current;
+        /** The error message saved with the last file, or null if it wasn't an error. */
+        private String message;
 
         Run(PrivateFolder out) {
             this.out = out;
@@ -214,6 +242,19 @@ public class GarminSamples {
             fetch(WEIGHT_TODAY, GarminDataConfig.fill(config.weighInsPath(), today.toString()), config.weighInsQuery());
             fetch(WEIGHT_NONE, GarminDataConfig.fill(config.weighInsPath(), EMPTY_DAY.toString()),
                     config.weighInsQuery());
+
+            // Replies not seen yet: saved raw, and one failing doesn't stop the rest.
+            LocalDate weightFrom = today.minusDays(WEIGHT_RANGE_DAYS - 1);
+            fetchNew(WEIGHT_RANGE,
+                    GarminDataConfig.fill(config.weighInsRangePath(), weightFrom.toString(), today.toString()),
+                    config.weighInsQuery());
+            LocalDate dailyFrom = today.minusDays(DAILY_RANGE_DAYS - 1);
+            fetchNew(SUMMARY_RANGE, config.dailySummariesPath(), Map.of(
+                    config.dailySummariesStartDateParam(), dailyFrom.toString(),
+                    config.dailySummariesEndDateParam(), today.toString()));
+            fetchNew(SLEEP_RANGE,
+                    GarminDataConfig.fill(config.sleepStatsPath(), dailyFrom.toString(), today.toString()), Map.of());
+            fetchNew(ACTIVITY_TYPES, config.activityTypesPath(), Map.of());
         }
 
         /** Today in the Garmin profile's time zone, or the computer's if the profile has none we can read. */
@@ -254,9 +295,31 @@ public class GarminSamples {
          * or a 404. GarminApi returns "" for HTTP 204, so an empty reply is saved as 204.
          */
         private JsonNode fetch(String file, String path, Map<String, String> query) {
+            return fetch(file, path, query, false);
+        }
+
+        /**
+         * One of the new calls: as {@link #fetch(String, String, Map)}, but an HTTP error in Garmin's reply other
+         * than 401, 403 and 429 is saved too, and anything but a 200 with JSON goes in {@link #failures}. A failed
+         * token refresh still stops the run (it isn't an {@link UnexpectedStatusException}).
+         */
+        private void fetchNew(String file, String path, Map<String, String> query) {
+            JsonNode reply = fetch(file, path, query, true);
+            int status = lastStatus();
+            if (status != 200) {
+                // GarminApi gives "" for a 204 and for an empty 200 alike, so don't name a status.
+                failures.add(file + ": " + (status == 204 ? "Garmin's reply was empty." : message));
+            } else if (reply.isMissingNode()) {
+                failures.add(file + ": Garmin's reply wasn't JSON.");
+            }
+        }
+
+        /** @param saveErrors also save an {@link UnexpectedStatusException}, rather than stopping the run */
+        private JsonNode fetch(String file, String path, Map<String, String> query, boolean saveErrors) {
             current = file;
+            message = null;
             ObjectNode content = json.createObjectNode();
-            JsonNode reply;
+            JsonNode reply = json.missingNode();
             try {
                 String body = api.get(path, query);
                 reply = parse(body);
@@ -268,9 +331,21 @@ public class GarminSamples {
                 }
             } catch (NotFoundException e) {
                 // GarminApi doesn't hand over a 404's body, so save its message instead.
-                reply = json.missingNode();
+                message = e.getMessage();
                 content.put("status", 404);
-                content.put("message", e.getMessage());
+                content.put("message", message);
+            } catch (UnexpectedStatusException e) {
+                if (!saveErrors) {
+                    throw e;
+                }
+                // Garmin's reply, with its secrets already hidden, may say what was wrong (a range too long, say).
+                // Not the exception's message: its "Try again later" is wrong for a 400, and the folder can't be
+                // used again anyway.
+                message = "Garmin returned HTTP " + e.status() + " for " + path
+                        + ". Its reply, in the file, may say why.";
+                content.put("status", e.status());
+                content.put("message", message);
+                e.garminReply().ifPresent(garminReply -> content.put("body", garminReply));
             }
             write(out, file, json.writerWithDefaultPrettyPrinter().writeValueAsBytes(content));
             saved.add(new Saved(file, content.path("status").asInt()));

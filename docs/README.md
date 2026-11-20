@@ -13,6 +13,9 @@
 | [Phase 1: Login](phases/phase-1-login.md) | Detailed plan for the command-line login |
 | [Phase 2: Data](phases/phase-2-data.md) | Detailed plan for fetching activities, daily summary and sleep, and the cache |
 | [Phase 3: MCP server](phases/phase-3-mcp.md) | Detailed plan for the MCP server and its four tools |
+| [Phase 4a: Weight history](phases/phase-4a-weight.md) | Detailed plan for weight and body composition over a range of days |
+| [Phase 4b: Daily log](phases/phase-4b-daily-log.md) | Detailed plan for one call that gets everything Garmin can put in a health log row |
+| [Phase 4c: Catch-up](phases/phase-4c-catch-up.md) | Detailed plan for filling in the days the health log is missing |
 
 ## The short version
 

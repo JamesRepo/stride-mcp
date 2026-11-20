@@ -51,6 +51,12 @@ class GarminSamplesTest {
     private static final String MISSING = "/activity-service/activity/1";
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
+    // The new calls (phases 4a and 4b), for LONDON_TODAY: 30 days of weigh-ins, 28 days of the others.
+    private static final String WEIGHT_RANGE = "/weight-service/weight/range/2026-09-25/2026-10-24";
+    private static final String SUMMARY_RANGE = "/usersummary-service/v2/dailysummaries";
+    private static final Map<String, String> SUMMARY_RANGE_QUERY = Map.of("startDate", "2026-09-27", "endDate", "2026-10-24");
+    private static final String SLEEP_RANGE = "/sleep-service/stats/sleep/daily/2026-09-27/2026-10-24";
+    private static final String ACTIVITY_TYPES = "/activity-service/activity/activityTypes";
 
     private static final String PROFILE_BODY = "{\"displayName\":\"jo runner\",\"fullName\":\"Jo Runner\"}";
     private static final String LONDON = "{\"timeZone\":\"Europe/London\",\"userInfo\":{\"email\":\"jo@example.com\"}}";
@@ -99,7 +105,12 @@ class GarminSamplesTest {
                 new Saved("sleep-last-night.json", 200),
                 new Saved("sleep-none.json", 204),
                 new Saved("weight-today.json", 200),
-                new Saved("weight-none.json", 200));
+                new Saved("weight-none.json", 200),
+                new Saved("weight-range.json", 200),
+                new Saved("summary-range.json", 200),
+                new Saved("sleep-range.json", 200),
+                new Saved("activity-types.json", 200));
+        assertThat(capture.failures()).isEmpty();
         assertThat(capture.notes()).containsExactly("Today is 2026-10-24 in Europe/London (from your Garmin profile).");
 
         assertThat(read("social-profile.json").path("body").path("displayName").asString()).isEqualTo("jo runner");
@@ -115,17 +126,156 @@ class GarminSamplesTest {
         assertThat(read("sleep-none.json").path("body").asString()).isEmpty();
         assertThat(read("weight-today.json").path("body").path("dateWeightList")).hasSize(1);
         assertThat(read("weight-none.json").path("body").path("dateWeightList")).isEmpty();
+        // The new replies are saved as they came, not parsed.
+        assertThat(read("weight-range.json").path("body").path("dailyWeightSummaries")).hasSize(1);
+        assertThat(read("summary-range.json").path("body")).hasSize(2);
+        assertThat(read("sleep-range.json").path("body").path("individualStats")).hasSize(1);
+        assertThat(read("activity-types.json").path("body").path(0).path("typeKey").asString()).isEqualTo("running");
 
         // Each request made once, in order, with no retries and no refresh.
         assertThat(garmin.requests()).extracting(FakeGarmin.Request::path).containsExactly(
                 PROFILE_PATH, PERSONAL, ACTIVITIES, ACTIVITIES, ACTIVITY, SPLITS, MISSING, SUMMARY, SUMMARY, SLEEP,
-                SLEEP, weight("2026-10-24"), weight("2000-01-01"));
+                SLEEP, weight("2026-10-24"), weight("2000-01-01"), WEIGHT_RANGE, SUMMARY_RANGE, SLEEP_RANGE,
+                ACTIVITY_TYPES);
         assertThat(garmin.requests(ACTIVITIES)).extracting(FakeGarmin.Request::queryParams).containsExactly(
                 activitiesQuery("2026-10-18", "2026-10-24"), activitiesQuery("2000-01-01", "2000-01-07"));
         assertThat(garmin.requests(SLEEP)).extracting(FakeGarmin.Request::queryParams).containsExactly(
                 sleepQuery("2026-10-24"), sleepQuery("2000-01-01"));
         assertThat(garmin.requests()).filteredOn(r -> r.path().startsWith("/weight-service/"))
                 .extracting(FakeGarmin.Request::queryParams).containsOnly(Map.of("includeAll", "true"));
+        assertThat(garmin.requests(SUMMARY_RANGE).getFirst().queryParams()).isEqualTo(SUMMARY_RANGE_QUERY);
+        assertThat(garmin.requests(SLEEP_RANGE).getFirst().query()).isNull();
+        assertThat(garmin.requests(ACTIVITY_TYPES).getFirst().query()).isNull();
+    }
+
+    @Test
+    void theRangesEndTodayInTheTimeZoneCaptureUsed() {
+        // 23 October in UTC, the computer's here, as the profile has no time zone.
+        queueRun(UTC_TODAY, "{}", "[]");
+
+        samples.capture(folder);
+
+        assertThat(garmin.requests()).extracting(FakeGarmin.Request::path).contains(
+                "/weight-service/weight/range/2026-09-24/2026-10-23",
+                "/sleep-service/stats/sleep/daily/2026-09-26/2026-10-23");
+        assertThat(garmin.requests(SUMMARY_RANGE).getFirst().queryParams())
+                .isEqualTo(Map.of("startDate", "2026-09-26", "endDate", "2026-10-23"));
+    }
+
+    @Test
+    void aNewCallThatFailsIsSavedAndNamedAndTheOthersStillRun() throws IOException {
+        garmin.respond(SUMMARY_RANGE, 404, "");
+        garmin.respond(SLEEP_RANGE, 400, "{\"message\":\"Range too long\",\"echo\":\"Bearer " + ACCESS_TOKEN + "\"}");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        Capture capture = samples.capture(folder);
+
+        assertThat(capture.saved()).hasSize(17).endsWith(
+                new Saved("weight-range.json", 200),
+                new Saved("summary-range.json", 404),
+                new Saved("sleep-range.json", 400),
+                new Saved("activity-types.json", 200));
+        assertThat(capture.failures()).containsExactly(
+                "summary-range.json: Garmin has nothing at " + SUMMARY_RANGE + " (HTTP 404).",
+                "sleep-range.json: Garmin returned HTTP 400 for " + SLEEP_RANGE + ". Its reply, in the file, may say why.");
+
+        assertThat(read("summary-range.json").path("message").asString()).contains("HTTP 404");
+        JsonNode badRange = read("sleep-range.json");
+        assertThat(badRange.path("status").asInt()).isEqualTo(400);
+        assertThat(badRange.path("message").asString()).contains("HTTP 400");
+        assertThat(badRange.path("body").asString()).contains("Range too long").doesNotContain(ACCESS_TOKEN);
+        assertThat(read("activity-types.json").path("status").asInt()).isEqualTo(200);
+        // Each once: no retries.
+        assertThat(garmin.requests(SUMMARY_RANGE)).hasSize(1);
+        assertThat(garmin.requests(SLEEP_RANGE)).hasSize(1);
+    }
+
+    @Test
+    void aNewCallWithAServerErrorIsSavedToo() throws IOException {
+        garmin.respond(ACTIVITY_TYPES, 503, "");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        Capture capture = samples.capture(folder);
+
+        assertThat(capture.failures()).containsExactly("activity-types.json: Garmin returned HTTP 503 for "
+                + ACTIVITY_TYPES + ". Its reply, in the file, may say why.");
+        assertThat(read("activity-types.json").path("status").asInt()).isEqualTo(503);
+    }
+
+    @Test
+    void aServerErrorOnAnOlderCallStillStopsTheRun() {
+        garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-24"), 500, "");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        assertThat(catchThrowable(() -> samples.capture(folder))).isExactlyInstanceOf(GarminException.class)
+                .hasMessageContaining("HTTP 500")
+                .hasMessageContaining("Capture stopped at summary-today.json.");
+        assertThat(garmin.requests(WEIGHT_RANGE)).isEmpty();
+    }
+
+    @Test
+    void aNewReplyThatIsEmptyOrNotJsonIsAFailure() throws IOException {
+        garmin.respond(WEIGHT_RANGE, 204, "");
+        garmin.respond(SUMMARY_RANGE, 200, "<html>Sign in</html>");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        Capture capture = samples.capture(folder);
+
+        assertThat(capture.failures()).containsExactly(
+                "weight-range.json: Garmin's reply was empty.",
+                "summary-range.json: Garmin's reply wasn't JSON.");
+        assertThat(read("summary-range.json").path("body").asString()).isEqualTo("<html>Sign in</html>");
+        assertThat(capture.saved()).hasSize(17);
+    }
+
+    @Test
+    void aFailedTokenRefreshOnANewCallStopsTheRunAtOnce() throws IOException {
+        // Garmin turns down the access token, and the refresh it sets off gets a server error.
+        garmin.respond(WEIGHT_RANGE, 401, "")
+                .respond(TOKEN_PATH, 503, "{\"error\":\"down\"}");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        Throwable thrown = catchThrowable(() -> samples.capture(folder));
+
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class)
+                .hasMessageContaining("HTTP 503 during the token refresh")
+                .hasMessageContaining("Capture stopped at weight-range.json.")
+                .hasMessageNotContaining(ACCESS_TOKEN).hasMessageNotContaining(REFRESH_TOKEN);
+        // One refresh, not one per new call, and nothing saved as if it were Garmin's weigh-ins reply.
+        assertThat(garmin.requests(TOKEN_PATH)).hasSize(1);
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+        assertThat(garmin.requests(SUMMARY_RANGE)).isEmpty();
+        assertThat(files()).doesNotContain("weight-range.json").hasSize(13);
+    }
+
+    @Test
+    void rateLimitingOnANewCallStopsTheRunAtOnce() throws IOException {
+        garmin.respond(SUMMARY_RANGE, 429, "");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        Throwable thrown = catchThrowable(() -> samples.capture(folder));
+
+        assertThat(thrown).isExactlyInstanceOf(GarminException.class).hasCauseInstanceOf(RateLimitedException.class)
+                .hasMessageContaining("Garmin is rate limiting")
+                .hasMessageContaining("Capture stopped at summary-range.json.")
+                .hasMessageContaining("weight-none.json, weight-range.json.");
+        assertThat(garmin.requests(SUMMARY_RANGE)).hasSize(1);
+        assertThat(garmin.requests(SLEEP_RANGE)).isEmpty();
+        assertThat(garmin.requests(ACTIVITY_TYPES)).isEmpty();
+        assertThat(files()).contains("weight-range.json").doesNotContain("summary-range.json").hasSize(14);
+    }
+
+    @Test
+    void forbiddenOnANewCallStopsTheRunAtOnce() throws IOException {
+        garmin.respond(WEIGHT_RANGE, 403, "");
+        queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
+
+        assertThat(catchThrowable(() -> samples.capture(folder))).isExactlyInstanceOf(GarminException.class)
+                .hasMessageContaining("HTTP 403")
+                .hasMessageContaining("Capture stopped at weight-range.json.");
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+        assertThat(garmin.requests(SUMMARY_RANGE)).isEmpty();
+        assertThat(files()).doesNotContain("weight-range.json").hasSize(13);
     }
 
     @Test
@@ -158,7 +308,7 @@ class GarminSamplesTest {
         Capture capture = samples.capture(folder);
 
         assertThat(capture.saved()).extracting(Saved::file).doesNotContain("activity.json", "activity-splits.json")
-                .hasSize(11);
+                .hasSize(15);
         assertThat(capture.notes()).anySatisfy(note -> assertThat(note)
                 .startsWith("No activities in the last 7 days, so activity.json and activity-splits.json were skipped."));
         assertThat(read("activities.json").path("body")).isEmpty();
@@ -325,7 +475,7 @@ class GarminSamplesTest {
 
         assertThat(PosixFilePermissions.toString(Files.getPosixFilePermissions(folder, LinkOption.NOFOLLOW_LINKS)))
                 .isEqualTo("rwx------");
-        assertThat(files()).hasSize(13).allSatisfy(file -> assertThat(PosixFilePermissions.toString(
+        assertThat(files()).hasSize(17).allSatisfy(file -> assertThat(PosixFilePermissions.toString(
                 Files.getPosixFilePermissions(folder.resolve(file), LinkOption.NOFOLLOW_LINKS))).isEqualTo("rw-------"));
     }
 
@@ -335,7 +485,7 @@ class GarminSamplesTest {
 
         Capture capture = samples.capture(folder);
 
-        assertThat(files()).hasSize(13).noneMatch(file -> file.endsWith(".tmp"));
+        assertThat(files()).hasSize(17).noneMatch(file -> file.endsWith(".tmp"));
         for (String file : files()) {
             assertThat(Files.readString(folder.resolve(file))).as(file)
                     .doesNotContain(ACCESS_TOKEN).doesNotContain(REFRESH_TOKEN).doesNotContain("Bearer")
@@ -369,6 +519,16 @@ class GarminSamplesTest {
     }
 
     @Test
+    void refusesAFolderWithANewSampleFromAnEarlierRun() throws IOException {
+        Files.createDirectory(folder, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
+        Files.writeString(folder.resolve("activity-types.json"), "{}");
+
+        assertThat(catchThrowable(() -> samples.capture(folder))).isExactlyInstanceOf(GarminException.class)
+                .hasMessageContaining("already holds samples from an earlier run (activity-types.json)");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
     void refusesAFolderWithSamplesFromAnEarlierRun() throws IOException {
         Files.createDirectory(folder, PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rwx------")));
         Files.writeString(folder.resolve("activity.json"), "{}");
@@ -384,7 +544,7 @@ class GarminSamplesTest {
         Files.writeString(folder.resolve("notes.txt"), "mine");
         queueRun(LONDON_TODAY, LONDON, TWO_ACTIVITIES);
 
-        assertThat(samples.capture(folder).saved()).hasSize(13);
+        assertThat(samples.capture(folder).saved()).hasSize(17);
         assertThat(Files.readString(folder.resolve("notes.txt"))).isEqualTo("mine");
     }
 
@@ -404,7 +564,21 @@ class GarminSamplesTest {
                 .respond(SLEEP, sleepQuery("2000-01-01"), 204, "")
                 .respond(SLEEP, sleepQuery(today.toString()), 200, "{\"dailySleepDTO\":{\"sleepTimeSeconds\":27000}}")
                 .respond(weight(today.toString()), 200, "{\"dateWeightList\":[{\"weight\":75400.0}]}")
-                .respond(weight("2000-01-01"), 200, "{\"dateWeightList\":[]}");
+                .respond(weight("2000-01-01"), 200, "{\"dateWeightList\":[]}")
+                // Made up: these replies haven't been seen yet.
+                .respond(weightRange(today), 200, "{\"dailyWeightSummaries\":[{\"summaryDate\":\"" + today + "\"}]}")
+                .respond(SUMMARY_RANGE, 200, "[{\"calendarDate\":\"" + today.minusDays(1) + "\"},"
+                        + "{\"calendarDate\":\"" + today + "\"}]")
+                .respond(sleepRange(today), 200, "{\"individualStats\":[{\"calendarDate\":\"" + today + "\"}]}")
+                .respond(ACTIVITY_TYPES, 200, "[{\"typeId\":1,\"typeKey\":\"running\",\"parentTypeId\":17}]");
+    }
+
+    private static String weightRange(LocalDate today) {
+        return "/weight-service/weight/range/" + today.minusDays(29) + "/" + today;
+    }
+
+    private static String sleepRange(LocalDate today) {
+        return "/sleep-service/stats/sleep/daily/" + today.minusDays(27) + "/" + today;
     }
 
     private static String weight(String date) {

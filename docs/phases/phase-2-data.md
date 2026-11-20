@@ -438,7 +438,7 @@ I (the agent) mustn't call Garmin with the owner's tokens. So the owner runs one
 java -jar target/stride-mcp.jar capture ~/stride-samples
 ```
 
-It makes about 13 calls, once each, with the cache turned off:
+It makes about 17 calls, once each, with the cache turned off:
 
 | File | Request |
 |---|---|
@@ -451,6 +451,10 @@ It makes about 13 calls, once each, with the cache turned off:
 | `summary-today.json`, `summary-past.json` | Today, and 30 days ago |
 | `sleep-last-night.json`, `sleep-none.json` | Last night, and 1 January 2000 (should have no sleep) |
 | `weight-today.json`, `weight-none.json` | Today's weigh-ins, and 1 January 2000 (should have none). Added 25 October 2026. Weigh yourself before running capture, or `weight-today.json` will be empty too. |
+| `weight-range.json` | Every weigh-in for the last 30 days, today included (`/weight-service/weight/range/{from}/{to}`, `includeAll=true`). For [phase 4a](phase-4a-weight.md). Added 20 November 2026. |
+| `summary-range.json` | Daily summaries for the last 28 days, today included (`/usersummary-service/v2/dailysummaries`, `startDate`, `endDate`). For [phase 4b](phase-4b-daily-log.md). Added 20 November 2026. |
+| `sleep-range.json` | Sleep stats for the same 28 days (`/sleep-service/stats/sleep/daily/{from}/{to}`). For phase 4b. Added 20 November 2026. |
+| `activity-types.json` | Garmin's list of activity types (`/activity-service/activity/activityTypes`). For phase 4b. Added 20 November 2026. |
 
 Each file holds the status code and the reply body, never headers, never tokens:
 
@@ -460,6 +464,7 @@ Each file holds the status code and the reply body, never headers, never tokens:
 | 200 that isn't JSON | `{"status": 200, "body": "<the text>"}` |
 | Empty (204) | `{"status": 204, "body": ""}`. `GarminApi` returns `""` for a 204, so an empty 200 would look the same. |
 | 404 | `{"status": 404, "message": "Garmin has nothing at … (HTTP 404)."}`. `GarminApi` doesn't pass on a 404's body. |
+| Another HTTP error, for the four new calls only | `{"status": 400, "message": "Garmin returned HTTP 400 for …. Its reply, in the file, may say why.", "body": "<Garmin's reply, tokens hidden>"}` |
 
 How it works out the dates and the activity:
 
@@ -470,7 +475,11 @@ How it works out the dates and the activity:
 | What happens | It does |
 |---|---|
 | Any 404, an empty reply, an empty list | Saves it and carries on |
-| Not logged in, 401 after one refresh, 403, 429, 5xx, no connection, a profile with no `displayName` | Stops at once. Says why, which file it stopped at, and which files were saved. |
+| One of the four new calls gets anything but a 200 with JSON (a 404, a 400, a 5xx, an empty reply, a web page) | Saves it and carries on. At the end it names each one on stderr and exits with an error (code 1). Send its file too: it shows what went wrong. |
+| Not logged in, 401 after one refresh, a token refresh that fails (even a 5xx), 403, 429, no connection, a profile with no `displayName` | Stops at once, for every call. Says why, which file it stopped at, and which files were saved. A failed refresh would only fail again on the next call. |
+| A 5xx on any of the older calls | Stops at once, as above |
+
+The four new calls (20 November 2026) are replies nobody has seen yet, so capture saves them raw and never reads them. That's why one of them failing doesn't stop the others.
 
 The folder:
 

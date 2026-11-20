@@ -10,8 +10,9 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
 
 /**
  * Everything about Garmin's data endpoints that Garmin may change: paths, query parameter names and paging.
- * Also how long the cache keeps each reply. Keep these values here and nowhere else. Based on python-garminconnect (checked October 2026).
- * Paths are templates: fill the {@code {…}} part with {@link #fill(String, String)}.
+ * Also how long the cache keeps each reply. Keep these values here and nowhere else. Based on python-garminconnect (checked October 2026;
+ * the range calls and activity types 20 November 2026). Paths are templates: fill the {@code {…}} parts with
+ * {@link #fill(String, String...)}.
  *
  * @param socialProfilePath       who I am, with {@code displayName}
  * @param personalInformationPath my profile's time zone, by {@code {displayName}}
@@ -33,6 +34,16 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
  * @param sleepBufferMinutes      the value sent for {@code sleepBufferParam}
  * @param weighInsPath            one day's weigh-ins, by {@code {date}} (YYYY-MM-DD)
  * @param weighInsAllParam        asks for every weigh-in that day, not just one; see {@link #weighInsQuery()}
+ * @param weighInsRangePath       the weigh-ins over a range, by {@code {from}} and {@code {to}} (YYYY-MM-DD, both
+ *                                included). Sent with {@link #weighInsQuery()} too. Only {@code capture} uses it so far.
+ * @param dailySummariesPath      daily summaries over a range. Only {@code capture} uses it so far.
+ * @param dailySummariesStartDateParam first day of the range (YYYY-MM-DD)
+ * @param dailySummariesEndDateParam   last day of the range (YYYY-MM-DD)
+ * @param sleepStatsPath          each night's sleep stats over a range, by {@code {from}} and {@code {to}}
+ *                                (YYYY-MM-DD). Garmin allows at most 28 days (python-garminconnect, checked
+ *                                20 November 2026). Only {@code capture} uses it so far.
+ * @param activityTypesPath       Garmin's list of activity types, with each one's parent. Only {@code capture} uses
+ *                                it so far.
  * @param cacheLifetimes          how long the cache keeps each kind of reply
  */
 public record GarminDataConfig(
@@ -56,6 +67,12 @@ public record GarminDataConfig(
         int sleepBufferMinutes,
         String weighInsPath,
         String weighInsAllParam,
+        String weighInsRangePath,
+        String dailySummariesPath,
+        String dailySummariesStartDateParam,
+        String dailySummariesEndDateParam,
+        String sleepStatsPath,
+        String activityTypesPath,
         CacheLifetimes cacheLifetimes) {
 
     /**
@@ -96,7 +113,10 @@ public record GarminDataConfig(
      */
     public static final int DEFAULT_RANGE_DAYS = 7;
 
-    /** The query for {@code weighInsPath}: every weigh-in that day. The client and {@code capture} both send this. */
+    /**
+     * The query for {@code weighInsPath} and {@code weighInsRangePath}: every weigh-in, not one a day. The client and
+     * {@code capture} both send this.
+     */
     public Map<String, String> weighInsQuery() {
         return Map.of(weighInsAllParam, "true");
     }
@@ -126,6 +146,12 @@ public record GarminDataConfig(
                 60,
                 "/weight-service/weight/dayview/{date}",
                 "includeAll",
+                "/weight-service/weight/range/{from}/{to}",
+                "/usersummary-service/v2/dailysummaries",
+                "startDate",
+                "endDate",
+                "/sleep-service/stats/sleep/daily/{from}/{to}",
+                "/activity-service/activity/activityTypes",
                 new CacheLifetimes(
                         Duration.ofDays(7),
                         Duration.ofDays(7),
@@ -137,15 +163,26 @@ public record GarminDataConfig(
     }
 
     /**
-     * Fills a path template's one {@code {…}} part with a value, encoded with {@link GarminApi#segment(String)}
-     * so an id or display name can't change which address is called.
+     * Fills a path template's {@code {…}} parts with values, in order, each encoded with
+     * {@link GarminApi#segment(String)} so an id or display name can't change which address is called.
+     *
+     * @throws IllegalArgumentException if the template doesn't have exactly one {@code {…}} part per value
      */
-    public static String fill(String template, String value) {
+    public static String fill(String template, String... values) {
         Matcher placeholder = PLACEHOLDER.matcher(template);
-        if (!placeholder.find()) {
-            throw new IllegalArgumentException("No {…} part in " + template);
+        var path = new StringBuilder();
+        int end = 0;
+        int filled = 0;
+        while (placeholder.find()) {
+            if (filled == values.length) {
+                throw new IllegalArgumentException("More {…} parts than values in " + template);
+            }
+            path.append(template, end, placeholder.start()).append(GarminApi.segment(values[filled++]));
+            end = placeholder.end();
         }
-        return template.substring(0, placeholder.start()) + GarminApi.segment(value)
-                + template.substring(placeholder.end());
+        if (filled < values.length) {
+            throw new IllegalArgumentException("Fewer {…} parts than values in " + template);
+        }
+        return path.append(template.substring(end)).toString();
     }
 }

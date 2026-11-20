@@ -46,10 +46,14 @@ Detailed plan: [Phase 3](phases/phase-3-mcp.md)
 - Connect it to Claude Desktop or Claude Code
 - **Done when:** I can ask Claude "how was my training this week?" and get a real answer.
 
-### Phase 4: Make it reliable
-- Clear error messages, especially "please log in again"
-- Retries, rate limiting and tests
-- More tools: steps, weight and body composition history, training status, HRV. (The CLI `summary` shows the day's weight and body composition since 25 October 2026, and the `get_daily_summary` tool since 26 October 2026.)
+### Phase 4: Fill in my health log
+Plans approved 20 November 2026. My health log is a Google Sheet. The AI app writes it; stride-mcp supplies the Garmin side.
+- **4a, weight history:** a `get_weight` tool for a range of days, from my Garmin scale. Detailed plan: [Phase 4a](phases/phase-4a-weight.md)
+- **4b, daily log:** a `get_daily_log` tool: sleep, steps, activities and weight for up to 28 days, in one call. Detailed plan: [Phase 4b](phases/phase-4b-daily-log.md)
+- **4c, catch-up:** the AI finds the days the log is missing and fills in their Garmin columns, after showing me. Detailed plan: [Phase 4c](phases/phase-4c-catch-up.md)
+- **Done when:** I say "catch up my health log" and the blank Garmin columns are filled in correctly.
+
+(This was "Make it reliable". Its clear error messages were done in phase 3. Its other items moved to "Later, maybe".)
 
 ### Phase 5: Hosted online (needed for ChatGPT)
 - Streamable HTTP transport
@@ -57,6 +61,8 @@ Detailed plan: [Phase 3](phases/phase-3-mcp.md)
 - See [Running it](running.md) for why ChatGPT needs this
 
 ### Later, maybe
+- More tools: training status, HRV, stress and Body Battery detail
+- Rate limiting, beyond stopping on a 429
 - Writing to Garmin (creating workouts)
 - Summary prompts ("weekly review")
 - Importing a Garmin data export as an offline backup

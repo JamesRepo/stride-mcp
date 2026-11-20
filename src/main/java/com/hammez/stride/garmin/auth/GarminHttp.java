@@ -63,9 +63,22 @@ final class GarminHttp {
                 + "It may be blocking this connection. Wait a while before trying again.");
     }
 
+    /** An HTTP status with no meaning of its own, during a login or token step. */
     static GarminException unexpected(String step, HttpResponse<String> response, String... secrets) {
-        return new GarminException("Garmin returned HTTP " + response.statusCode() + " during " + step
-                + ". Try again later.", Redactor.redact(response.body(), secrets));
+        return new GarminException(unexpectedMessage(step, response), Redactor.redact(response.body(), secrets));
+    }
+
+    /**
+     * An HTTP status with no meaning of its own, in reply to a data request. Its own type, so {@code capture} can
+     * save it and carry on. Token steps never throw it: a failed refresh must stop the run, not be tried again.
+     */
+    static UnexpectedStatusException unexpectedData(String step, HttpResponse<String> response, String... secrets) {
+        return new UnexpectedStatusException(unexpectedMessage(step, response), response.statusCode(),
+                Redactor.redact(response.body(), secrets));
+    }
+
+    private static String unexpectedMessage(String step, HttpResponse<String> response) {
+        return "Garmin returned HTTP " + response.statusCode() + " during " + step + ". Try again later.";
     }
 
     /** HTTP 400 or 401 with an error we don't recognise. Logging in again is the likely fix. */
