@@ -6,6 +6,7 @@
 |---|---|
 | [Quick start](quick-start.md) | Build it, log in, read your data on the command line, then ask an AI app about it |
 | [Concepts](concepts.md) | What MCP is, and the other words we'll use |
+| [Watch a tool call](watch-a-tool-call.md) | Learn MCP by typing its messages yourself, and stepping through the code in the debugger |
 | [Getting Garmin data](garmin-access.md) | The ways in, and their risks |
 | [Project plan](project-plan.md) | What we're building, in what order |
 | [Running it](running.md) | Where it runs, how to add it to Claude Code, Claude Desktop or Codex CLI, and what to do when it doesn't connect |
