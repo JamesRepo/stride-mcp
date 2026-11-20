@@ -4,7 +4,7 @@
 
 **Done when:** I ask Claude "how was my training this week?" and get an answer built from my real Garmin data.
 
-_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Step 5 (errors) done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026). Step 6 (end to end over stdio) done 30 October 2026: see [Settled in step 6](#settled-in-step-6-30-october-2026). Next: step 7, docs._
+_Status: plan approved 25 October 2026, with all the proposed decisions. Step 2 (dependencies and `serve`) done 25 October 2026. Step 3 (the shared 90-day limit) done 25 October 2026. Step 4 (the four tools and their replies) done 26 October 2026: see [Settled in step 4](#settled-in-step-4-26-october-2026). Step 5 (errors) done 29 October 2026: see [Settled in step 5](#settled-in-step-5-29-october-2026). Step 6 (end to end over stdio) done 30 October 2026: see [Settled in step 6](#settled-in-step-6-30-october-2026). Step 7 (docs) done 31 October 2026: see [Settled in step 7](#settled-in-step-7-31-october-2026). Next: step 8, the owner's live check._
 
 ## What changes
 
@@ -64,7 +64,7 @@ java -jar stride-mcp.jar serve
 - Logs go to `~/.stride-mcp/stride-mcp.log`, a `600` file. A missing folder is created as `700`; an existing one is left alone, in case it's one the owner named with `--stride.log-file`. A link or a folder at the log path is refused. No log rolling (it would create new files open to others): instead, at startup a log over 10 MB becomes `stride-mcp.log.old` and a new one starts. Warnings and errors only, plus one line per tool call (tool name, how long it took, whether it worked, and the message the AI got if it failed). Never tokens, never Garmin's replies.
 - Belt and braces: the server keeps the real stdout for itself, then points `System.out` at stderr. So a stray `println` anywhere can't break the connection. AI apps keep a server's stderr as its log.
 
-`serve` takes no options except the Spring settings (`--stride.token-file=…`, `--stride.cache-dir=…`). `whoami`, `capture` and the others don't change.
+`serve` takes no options except the Spring settings (`--stride.token-file=…`, `--stride.cache-dir=…`, `--stride.log-file=…`). `whoami`, `capture` and the others don't change.
 
 ### Settled in step 2 (25 October 2026)
 
@@ -275,6 +275,18 @@ How the tests show calls really ran at once: FakeGarmin holds a summary request 
 
 The tests compare replies with the ones `GarminToolsTest` pins. Those replies now live in `ToolFixtures`, shared by the three test classes.
 
+## Settled in step 7 (31 October 2026)
+
+How the AI apps start a stdio server, checked 31 October 2026 with Claude Code 2.1, Codex CLI 0.163 and Claude Desktop on macOS.
+
+| Question | Answer | What we did |
+|---|---|---|
+| Is a bare `java` found, and is it Java 25? | Not for sure. Claude Code passes on its own environment. Codex CLI passes only a short list (`PATH`, `HOME`, `SHELL`, `USER` and a few more; not `JAVA_HOME`). Claude Desktop is a Mac app, so its `PATH` may be only `/usr/bin:/bin:/usr/sbin:/sbin`. There, `java` is Apple's `/usr/bin/java`: it picks the newest JDK, or `JAVA_HOME`'s if that's set. With `JAVA_HOME` on Java 23, the jar fails (`UnsupportedClassVersionError`, checked). A Homebrew JDK that isn't linked into `/Library/Java` isn't found at all. | Owner's choice: the docs give the full path to Java 25 in every app. The `claude` and `codex` commands fill it in with `$(/usr/libexec/java_home -v 25)`. Claude Desktop's JSON gets it pasted. |
+| Codex CLI's config | `[mcp_servers.<name>]` in `~/.codex/config.toml`: `command`, `args`, `env`, `startup_timeout_sec` (default 10 seconds). `codex mcp add <name> -- <command>` writes it. From the Codex MCP docs and `codex mcp add --help`. | Owner's choice: the docs show the command, then the TOML it writes |
+| Is 10 seconds enough? | `serve` answered `initialize` in about 2 seconds, four runs on the owner's Mac (with temporary files, no Garmin call) | No setting needed |
+| The jar's name | The pom has had `<finalName>stride-mcp</finalName>` since phase 1, so `./mvnw package` makes `target/stride-mcp.jar`. A `stride-mcp-0.0.1-SNAPSHOT.jar` in `target/` was an old build from before phase 3 (Spring Boot 4.1.1, no MCP classes). | No change. The old jar was deleted (owner's choice). |
+| Claude Code's scope | `claude mcp add` adds a server to the current folder only (`local`), unless told otherwise | The docs use `--scope user`, so it works in every folder |
+
 ## A process that keeps running
 
 The CLI runs for a second. The server runs as long as the AI app does. What that changes:
@@ -351,8 +363,8 @@ At the live check:
 4. ✅ **The tools and their replies** in `mcp/`, with descriptions. Settled: see [Settled in step 4](#settled-in-step-4-26-october-2026). Done 26 October 2026. Tests: each tool's JSON from the fixtures, the defaults, `type` and `refresh` passed on, Garmin's `0`s and missing values left out, each bad input refused with nothing sent to Garmin, and the four tools with their descriptions and hints in `tools/list` over stdio.
 5. ✅ **Errors** as tool errors, built by the tools themselves (not Spring AI's default text), with CLI wording replaced where needed. Settled: see [Settled in step 5](#settled-in-step-5-29-october-2026). Done 29 October 2026. Tests: each row of [Errors](#errors), and not logged in over stdio.
 6. ✅ **End to end over stdio:** the piped-stream test, and the side-by-side test. Settled: see [Settled in step 6](#settled-in-step-6-30-october-2026). Done 30 October 2026. Tests: a `tools/call` over stdio gets FakeGarmin's reply, the same as `GarminToolsTest` pins; a `println` during a call goes to stderr; calls at once give the same replies as one at a time, with one token refresh and one profile lookup, in the tools and over stdio; when either fails, Garmin is asked once.
-7. **Docs:** [Running it](../running.md) gets the `serve` command. The quick start gets a short "Use it from an AI app" section. AGENTS.md status.
-8. **Live check** (owner): add stride-mcp to Claude Code (`claude mcp add stride -- java -jar …/stride-mcp.jar serve`), ask "how was my training this week?", then the questions in [What I should see](#what-i-should-see). Then the same in Codex CLI, since it must work with any MCP app.
+7. ✅ **Docs:** [Running it](../running.md) gets the `serve` command for Claude Code, Claude Desktop and Codex CLI, its settings, and what to do when it goes wrong. The quick start gets a short "Use it from an AI app" section, with the four tools. AGENTS.md status. Settled: see [Settled in step 7](#settled-in-step-7-31-october-2026). Done 31 October 2026.
+8. **Live check** (owner): add stride-mcp to Claude Code as [Running it](../running.md#claude-code) says, ask "how was my training this week?", then the questions in [What I should see](#what-i-should-see). Then the same in Codex CLI, since it must work with any MCP app.
 
 ## Not in phase 3
 

@@ -1,8 +1,8 @@
 # Quick start
 
-Log in to Garmin, check it works, and read your data. Takes about five minutes.
+Log in to Garmin, check it works, read your data, then ask an AI app about it. Takes about ten minutes.
 
-_Written October 2026. stride-mcp can now log in and read your activities, daily summary and sleep on the command line. It can't talk to an AI app yet: that's phase 3._
+_Written October 2026. stride-mcp logs in, reads your activities, daily summary and sleep on the command line, and serves them to an AI app over MCP._
 
 ## You need
 
@@ -172,7 +172,36 @@ Add `--no-cache` to ask Garmin anyway. The new reply is still saved. The full ru
 
 If the cache folder can't be used, the command prints one line saying why (starting "Not using the cache") and still works. It just asks Garmin each time.
 
-## 5. Log out (optional)
+## 5. Use it from an AI app
+
+An AI app such as Claude Code starts stride-mcp itself, and asks it for your data when your question needs it. Log in first (step 2): the AI app can't do that part.
+
+Add it to Claude Code:
+
+```bash
+claude mcp add --scope user stride -- "$(/usr/libexec/java_home -v 25)/bin/java" -jar ~/Development/source/stride-mcp/target/stride-mcp.jar serve
+```
+
+Then start `claude` and ask:
+
+> How was my training this week?
+
+Claude Desktop, Codex CLI, the settings, and what to do if it doesn't connect: [Running it](running.md#1-stdio-recommended).
+
+### What the AI can do
+
+stride-mcp gives the AI four **tools**. It picks the ones your question needs.
+
+| Tool | Answers | Ask, for example |
+|---|---|---|
+| `get_activities` | Your activities between two dates (up to 90 days) | "How far did I run in September?" |
+| `get_activity` | One activity in detail: laps, heart rate, cadence, power, training effect | "How even were my laps on Thursday's run?" |
+| `get_daily_summary` | One day's steps, calories, heart rate, stress, Body Battery, and weight | "How active was I yesterday?" |
+| `get_sleep` | One night's sleep: times, stages, score | "How did I sleep last night?" |
+
+They only read: nothing is changed in Garmin Connect. Replies use the same cache as the commands. Say "I just synced my watch" to make the AI ask Garmin again. What each tool sends back, in detail: [Phase 3: MCP server](phases/phase-3-mcp.md#the-tools).
+
+## 6. Log out (optional)
 
 ```
 stride-mcp logout
@@ -201,6 +230,8 @@ This deletes the saved login, and the cache of your Garmin data.
 
 "No sleep recorded", "No data recorded" and "No activities" aren't errors. Garmin just has nothing for that time.
 
+Problems in an AI app: see [Running it](running.md#if-something-goes-wrong).
+
 ## Good to know
 
 - Your login is saved in `~/.stride-mcp/garmin_tokens.json`, readable only by you. Treat it like a password.
@@ -216,4 +247,6 @@ This deletes the saved login, and the cache of your Garmin data.
 
 - How the login works, in detail: [Phase 1: Login](phases/phase-1-login.md)
 - How the data commands work, and the cache: [Phase 2: Data](phases/phase-2-data.md)
-- Phase 3 turns these commands into an MCP server, so an AI app can use them: [Project plan](project-plan.md)
+- Every way to connect an AI app, and what to do when it doesn't: [Running it](running.md)
+- How the MCP server and its tools work: [Phase 3: MCP server](phases/phase-3-mcp.md)
+- What comes after: [Project plan](project-plan.md)
