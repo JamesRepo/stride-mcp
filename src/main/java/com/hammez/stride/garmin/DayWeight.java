@@ -15,7 +15,9 @@ import java.util.Optional;
 public record DayWeight(WeighIn weight, WeighIn bodyComposition, int weighIns) {
 
     /**
-     * @param weighIns oldest first, as {@link GarminClient#weighIns} returns them
+     * @param weighIns one day's weigh-ins, oldest first, as {@link GarminClient#weighIns(java.time.LocalDate)} returns
+     *                 them. Not a range: split {@link GarminClient#weighIns(java.time.LocalDate, java.time.LocalDate)}
+     *                 by day first.
      * @return empty if no weigh-in had a weight or any body composition
      */
     public static Optional<DayWeight> of(List<WeighIn> weighIns) {

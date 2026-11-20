@@ -11,6 +11,8 @@ import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Optional;
+import java.util.TreeMap;
+import java.util.function.Function;
 
 import com.hammez.stride.garmin.auth.GarminException;
 
@@ -141,9 +143,8 @@ final class GarminReplies {
     /**
      * One day's weigh-ins, oldest first, or none. They are in {@code dateWeightList}.
      * <p>
-     * Seen 25 October 2026, on a day with none: a 200 with an empty {@code dateWeightList}. Not seen yet: one weigh-in.
-     * Its field names and units (masses in grams) follow python-garminconnect (October 2026); {@code totalAverage}
-     * in the real reply uses the same names.
+     * Seen 25 October 2026, on a day with none: a 200 with an empty {@code dateWeightList}. Seen 20 November 2026,
+     * with one weigh-in from an Index scale: the field names below, and masses in grams.
      */
     static List<WeighIn> weighIns(JsonNode day, LocalDate date, String what) {
         if (day.isMissingNode()) {
@@ -155,32 +156,93 @@ final class GarminReplies {
         }
         var weighIns = new ArrayList<Listed>();
         for (JsonNode entry : list) {
-            if (!entry.isObject()) {
-                throw new UnexpectedReplyException(what);
-            }
-            // Garmin's own order isn't known, so sort by time: the exact moment, or else the time on the clock
-            // ("date", epoch milliseconds), which orders one day's weigh-ins just as well.
-            Instant time = epochMillis(entry, "timestampGMT");
-            Instant order = time != null ? time : epochMillis(entry, "date");
-            weighIns.add(new Listed(order, new WeighIn(
-                    date,
-                    time,
-                    kilograms(entry, "weight"),
-                    decimal(entry, "bmi"),
-                    decimalPercent(entry, "bodyFat"),
-                    decimalPercent(entry, "bodyWater"),
-                    kilograms(entry, "muscleMass"),
-                    kilograms(entry, "boneMass"),
-                    whole(entry, "visceralFat"),
-                    whole(entry, "metabolicAge"))));
+            weighIns.add(weighIn(entry, date, what));
         }
-        // A weigh-in with no time at all goes first, so the last one is the latest known.
-        weighIns.sort(Comparator.comparing(Listed::order, Comparator.nullsFirst(Comparator.naturalOrder())));
-        return weighIns.stream().map(Listed::weighIn).toList();
+        return sorted(weighIns);
     }
 
-    /** A weigh-in and what it is sorted by. */
-    private record Listed(Instant order, WeighIn weighIn) {
+    /**
+     * The weigh-ins over a range of days, oldest first, or none. Seen 20 November 2026 (30 days): one entry in
+     * {@code dailyWeightSummaries} per day with a weigh-in, newest day first, each with its {@code summaryDate} and
+     * that day's weigh-ins in {@code allWeightMetrics} (newest first), named as in the one-day reply. The day's
+     * {@code latestWeight}, {@code minWeight} and {@code maxWeight} are left alone: we pick from the list ourselves.
+     * Not seen yet: a range with no weigh-ins, so a missing or null list is taken as none.
+     * <p>
+     * A day outside {@code from}–{@code to} is left out, so a cached range never shows more than was asked for.
+     * A day listed twice would be read twice: never seen, so not guarded against.
+     */
+    static List<WeighIn> rangeWeighIns(JsonNode range, LocalDate from, LocalDate to, String what) {
+        if (range.isMissingNode()) {
+            return List.of();
+        }
+        JsonNode days = range.path("dailyWeightSummaries");
+        if (!range.isObject() || !(days.isArray() || days.isMissingNode() || days.isNull())) {
+            throw new UnexpectedReplyException(what);
+        }
+        var weighIns = new ArrayList<Listed>();
+        for (JsonNode day : days) {
+            LocalDate date = date(day, "summaryDate", what);
+            JsonNode list = day.path("allWeightMetrics");
+            if (date == null || !(list.isArray() || list.isMissingNode() || list.isNull())) {
+                throw new UnexpectedReplyException(what);
+            }
+            if (date.isBefore(from) || date.isAfter(to)) {
+                continue;
+            }
+            for (JsonNode entry : list) {
+                weighIns.add(weighIn(entry, date, what));
+            }
+        }
+        return sorted(weighIns);
+    }
+
+    private static Listed weighIn(JsonNode entry, LocalDate date, String what) {
+        if (!entry.isObject()) {
+            throw new UnexpectedReplyException(what);
+        }
+        // Both times are kept for sorting (see sorted()): the exact moment, and the time on the clock ("date").
+        Instant time = epochMillis(entry, "timestampGMT");
+        return new Listed(time, epochMillis(entry, "date"), new WeighIn(
+                date,
+                time,
+                kilograms(entry, "weight"),
+                decimal(entry, "bmi"),
+                decimalPercent(entry, "bodyFat"),
+                decimalPercent(entry, "bodyWater"),
+                kilograms(entry, "muscleMass"),
+                kilograms(entry, "boneMass"),
+                whole(entry, "visceralFat"),
+                whole(entry, "metabolicAge")));
+    }
+
+    /**
+     * Oldest first: by day, then by time within the day, rather than trusting Garmin's order. A day is sorted by one
+     * field only, as the two differ by the UTC offset ({@code date} is the clock time written as if it were UTC: an
+     * hour ahead of {@code timestampGMT} in UK summer time, seen 20 November 2026). So: {@code timestampGMT} if every
+     * weigh-in that day with a time has it, otherwise {@code date}. A weigh-in without the field used goes last in
+     * its day, so it can't become the day's weight, which is its first weigh-in (phase 4a).
+     */
+    private static List<WeighIn> sorted(List<Listed> weighIns) {
+        var days = new TreeMap<LocalDate, List<Listed>>();
+        for (Listed listed : weighIns) {
+            days.computeIfAbsent(listed.weighIn().date(), day -> new ArrayList<>()).add(listed);
+        }
+        var sorted = new ArrayList<WeighIn>();
+        for (List<Listed> day : days.values()) {
+            Function<Listed, Instant> key = day.stream()
+                    .filter(listed -> listed.gmt() != null || listed.clock() != null)
+                    .allMatch(listed -> listed.gmt() != null)
+                    ? Listed::gmt
+                    : Listed::clock;
+            day.stream()
+                    .sorted(Comparator.comparing(key, Comparator.nullsLast(Comparator.naturalOrder())))
+                    .forEach(listed -> sorted.add(listed.weighIn()));
+        }
+        return List.copyOf(sorted);
+    }
+
+    /** A weigh-in and the two times it can be sorted by: {@code timestampGMT} and {@code date}. */
+    private record Listed(Instant gmt, Instant clock, WeighIn weighIn) {
     }
 
     private static ActivitySummary summary(JsonNode ids, JsonNode type, JsonNode totals, String what) {
@@ -263,10 +325,7 @@ final class GarminReplies {
         return value == null || value < 0 || value > 100 ? null : value;
     }
 
-    /**
-     * Garmin sends weights in grams (python-garminconnect, October 2026). Not yet confirmed with a real weigh-in:
-     * see docs/phases/phase-2-data.md.
-     */
+    /** Garmin sends masses in grams (seen in real weigh-ins, 20 November 2026). */
     private static Double kilograms(JsonNode node, String field) {
         Double grams = decimal(node, field);
         return grams == null ? null : grams / 1000;
@@ -275,6 +334,19 @@ final class GarminReplies {
     private static String text(JsonNode node, String field) {
         JsonNode value = node.path(field);
         return value.isString() ? value.asString() : null;
+    }
+
+    /** A day such as {@code 2026-11-20}, or null if there's none. */
+    private static LocalDate date(JsonNode node, String field, String what) {
+        String value = text(node, field);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return LocalDate.parse(value);
+        } catch (DateTimeParseException e) {
+            throw new UnexpectedReplyException(what);
+        }
     }
 
     /** The list says {@code 2026-10-22 07:06:50}, one activity says {@code 2026-10-22T07:06:50.0}. */

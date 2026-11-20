@@ -108,14 +108,7 @@ public class GarminClient {
      *         so nothing is sent to Garmin.
      */
     public List<ActivitySummary> activities(LocalDate from, LocalDate to, String type) {
-        if (from.isAfter(to)) {
-            throw new IllegalArgumentException("from " + from + " is after to " + to + ". Put the earlier date first.");
-        }
-        if (ChronoUnit.DAYS.between(from, to) + 1 > GarminDataConfig.MAX_RANGE_DAYS) {
-            throw new IllegalArgumentException("from " + from + " to " + to + " is more than "
-                    + GarminDataConfig.MAX_RANGE_DAYS + " days. Ask for at most " + GarminDataConfig.MAX_RANGE_DAYS
-                    + " days, both ends included.");
-        }
+        checkRange(from, to, GarminDataConfig.MAX_RANGE_DAYS);
         String what = "the activities from " + from + " to " + to;
         String name = "activities-" + from + "-to-" + to + (type == null ? "" : "-" + fileSafe(type));
         if (!skipCache) {
@@ -262,6 +255,46 @@ public class GarminClient {
                 () -> api.get(path, config.weighInsQuery()),
                 body -> GarminReplies.weighIns(parse(body, what), date, what),
                 found -> dayLifetime(date, me, found.isEmpty()));
+    }
+
+    /**
+     * Every weigh-in recorded on {@code from} to {@code to} (both included), oldest first, each with its own day.
+     * One request, whatever the range. Days Garmin sends outside the range are left out. Kept 15 minutes if the
+     * range includes today or yesterday (the scale may still sync), otherwise a day, or an hour if there were none.
+     *
+     * @return empty if there were none
+     * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
+     *         {@link GarminDataConfig#MAX_WEIGHT_RANGE_DAYS}. Callers check their own input first; this is a safety
+     *         net, so nothing is sent to Garmin.
+     */
+    public List<WeighIn> weighIns(LocalDate from, LocalDate to) {
+        checkRange(from, to, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+        String what = "the weigh-ins from " + from + " to " + to;
+        Me me = me();
+        String path = GarminDataConfig.fill(config.weighInsRangePath(), from.toString(), to.toString());
+        return cached("weight-" + from + "-to-" + to, !skipCache,
+                () -> api.get(path, config.weighInsQuery()),
+                body -> GarminReplies.rangeWeighIns(parse(body, what), from, to, what),
+                found -> rangeLifetime(to, me, found.isEmpty()));
+    }
+
+    /** Like {@link #dayLifetime}, except that a range ending before yesterday with weigh-ins lasts a day. */
+    private Duration rangeLifetime(LocalDate to, Me me, boolean empty) {
+        if (!to.isBefore(today(me).minusDays(1))) {
+            return lifetimes().recentDay();
+        }
+        return empty ? lifetimes().emptyOlderDay() : lifetimes().olderWeightRange();
+    }
+
+    /** Refuses a range that is backwards or longer than {@code maxDays}, both ends included. */
+    private static void checkRange(LocalDate from, LocalDate to, int maxDays) {
+        if (from.isAfter(to)) {
+            throw new IllegalArgumentException("from " + from + " is after to " + to + ". Put the earlier date first.");
+        }
+        if (ChronoUnit.DAYS.between(from, to) + 1 > maxDays) {
+            throw new IllegalArgumentException("from " + from + " to " + to + " is more than " + maxDays
+                    + " days. Ask for at most " + maxDays + " days, both ends included.");
+        }
     }
 
     /** Today's date in my Garmin profile's time zone, or the computer's if the profile has none. */

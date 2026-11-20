@@ -37,6 +37,10 @@ class GarminClientTest {
     /** 00:30 on Sat 24 October in London (still summer time), but 23:30 on the 23rd in UTC. */
     private static final Instant NOW = Instant.parse("2026-10-23T23:30:00Z");
     private static final LocalDate OCT_23 = LocalDate.of(2026, 10, 23);
+    // The range in weight-range.json: 30 days, both ends included.
+    private static final LocalDate OCT_22 = LocalDate.of(2026, 10, 22);
+    private static final LocalDate NOV_14 = LocalDate.of(2026, 11, 14);
+    private static final LocalDate NOV_20 = LocalDate.of(2026, 11, 20);
 
     // Decoded, as Garmin sees them. The fixture's display name is "jo runner".
     private static final String PERSONAL = "/userprofile-service/userprofile/personal-information/jo runner";
@@ -46,6 +50,7 @@ class GarminClientTest {
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
     private static final String WEIGHT = "/weight-service/weight/dayview/2026-10-23";
+    private static final String WEIGHT_RANGE = "/weight-service/weight/range/2026-10-22/2026-11-20";
 
     @TempDir
     Path temp;
@@ -355,17 +360,42 @@ class GarminClientTest {
     }
 
     @Test
-    void weighInsWithoutAnExactTimeAreSortedByTheClockTime() {
+    void weighInsWithoutAnExactTimeAreSortedByTheClockTimeAndUntimedOnesGoLast() {
         signedInAs("{}");
         // "date" is the time on the clock, in epoch milliseconds: enough to order one day's weigh-ins.
         garmin.respond(WEIGHT, 200, """
-                {"dateWeightList":[{"weight":75900.0,"date":1792760400000},{"weight":75400.0,"date":1792738800000},
-                 {"weight":76100.0}]}""");
+                {"dateWeightList":[{"weight":75900.0,"date":1792760400000},{"weight":76100.0},
+                 {"weight":75400.0,"date":1792738800000}]}""");
 
         List<WeighIn> weighIns = client.weighIns(OCT_23);
 
-        assertThat(weighIns).extracting(WeighIn::weightKilograms).containsExactly(76.1, 75.4, 75.9);
+        assertThat(weighIns).extracting(WeighIn::weightKilograms).containsExactly(75.4, 75.9, 76.1);
         assertThat(weighIns).extracting(WeighIn::time).containsOnlyNulls();
+    }
+
+    @Test
+    void aWeighInWithNoTimeCantComeBeforeATimedOne() {
+        signedInAs("{}");
+        // The day's weight will be its first weigh-in, so one with no time must not be first.
+        garmin.respond(WEIGHT, 200, """
+                {"dateWeightList":[{"weight":76100.0},
+                 {"weight":75400.0,"date":1792737600000,"timestampGMT":1792737600000}]}""");
+
+        assertThat(client.weighIns(OCT_23)).extracting(WeighIn::weightKilograms).containsExactly(75.4, 76.1);
+    }
+
+    @Test
+    void aDayIsSortedByOneTimeFieldOnlyAsTheyDifferInSummerTime() {
+        signedInAs("{}");
+        // 20 October is UK summer time (UTC+1), so "date" (the clock time) is an hour ahead of timestampGMT.
+        // The first weigh-in was at 07:30 on the clock (only "date"), the second at 08:00 (07:00 UTC). Mixing the
+        // two fields would put 07:00 UTC before 07:30 on the clock: the wrong way round.
+        garmin.respond("/weight-service/weight/dayview/2026-10-20", 200, """
+                {"dateWeightList":[{"weight":75900.0,"date":1792483200000,"timestampGMT":1792479600000},
+                 {"weight":75400.0,"date":1792481400000}]}""");
+
+        assertThat(client.weighIns(LocalDate.of(2026, 10, 20))).extracting(WeighIn::weightKilograms)
+                .containsExactly(75.4, 75.9);
     }
 
     @Test
@@ -405,6 +435,150 @@ class GarminClientTest {
                     .isExactlyInstanceOf(UnexpectedReplyException.class)
                     .hasMessageContaining("the weigh-ins for 2026-10-23");
         }
+    }
+
+    @Test
+    void weighInFromARealReply() {
+        signedInAs("{}");
+        LocalDate nov20 = LocalDate.of(2026, 11, 20);
+        garmin.respond("/weight-service/weight/dayview/2026-11-20", 200, fixture("weight-today.json"));
+
+        assertThat(client.weighIns(nov20)).containsExactly(new WeighIn(nov20, Instant.ofEpochMilli(1795163709000L),
+                76.1, 23.5, 18.0, 55.3, 33.0, 3.2, null, null));
+    }
+
+    // Weigh-ins over a range
+
+    @Test
+    void rangeWeighInsFromARealReplyOldestFirstInKilograms() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT_RANGE, Map.of("includeAll", "true"), 200, fixture("weight-range.json"));
+
+        assertThat(client.weighIns(OCT_22, NOV_20)).containsExactly(
+                new WeighIn(OCT_23, Instant.ofEpochMilli(1792737459000L), 75.7, 23.4, 18.0, 55.3, 33.0, 3.2, null,
+                        null),
+                // Typed in on Garmin Connect, twice within 4 seconds: Garmin lists the later one first.
+                new WeighIn(NOV_14, Instant.ofEpochMilli(1794645069852L), 75.8, 23.4, null, null, null, null, null,
+                        null),
+                new WeighIn(NOV_14, Instant.ofEpochMilli(1794645073622L), 75.9, 23.4, null, null, null, null, null,
+                        null),
+                new WeighIn(LocalDate.of(2026, 11, 17), Instant.ofEpochMilli(1794899758000L), 76.0, 23.5, 18.0, 55.3,
+                        33.0, 3.2, null, null),
+                new WeighIn(NOV_20, Instant.ofEpochMilli(1795163709000L), 76.1, 23.5, 18.0, 55.3, 33.0, 3.2, null,
+                        null));
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+    }
+
+    @Test
+    void rangeWeighInsAreSortedByDayThenTime() {
+        signedInAs("{}");
+        // A weigh-in with no time goes last in its day.
+        garmin.respond(WEIGHT_RANGE, 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-11-14","allWeightMetrics":[{"weight":75900.0},
+                  {"weight":75800.0,"timestampGMT":1794645073622}]},
+                 {"summaryDate":"2026-10-23","allWeightMetrics":[{"weight":75700.0,"timestampGMT":1792737459000}]}]}""");
+
+        assertThat(client.weighIns(OCT_22, NOV_20)).extracting(WeighIn::weightKilograms)
+                .containsExactly(75.7, 75.8, 75.9);
+    }
+
+    @Test
+    void rangeDaysOutsideFromAndToAreLeftOut() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT_RANGE, 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-11-21","allWeightMetrics":[{"weight":76200.0,"timestampGMT":1795250000000}]},
+                 {"summaryDate":"2026-11-20","allWeightMetrics":[{"weight":76100.0,"timestampGMT":1795163709000}]},
+                 {"summaryDate":"2026-10-22","allWeightMetrics":[{"weight":75600.0,"timestampGMT":1792650000000}]},
+                 {"summaryDate":"2026-10-21","allWeightMetrics":[{"weight":75500.0,"timestampGMT":1792560000000}]}]}""");
+
+        assertThat(client.weighIns(OCT_22, NOV_20)).extracting(WeighIn::date).containsExactly(OCT_22, NOV_20);
+    }
+
+    @Test
+    void noRangeWeighInsIsEmpty() {
+        signedInAs("{}");
+        // Not seen yet: what Garmin sends for a range with no weigh-ins.
+        garmin.respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":[],\"totalAverage\":{\"weight\":null}}")
+                .respond(WEIGHT_RANGE, 204, "")
+                .respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":null}")
+                .respond(WEIGHT_RANGE, 200, "{}")
+                .respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":[{\"summaryDate\":\"2026-11-14\"}]}");
+
+        for (int i = 0; i < 5; i++) {
+            assertThat(client.weighIns(OCT_22, NOV_20)).isEmpty();
+        }
+    }
+
+    @Test
+    void rangeWeighInsThatDontReadAreAnUnexpectedReply() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT_RANGE, 200, "[]")
+                .respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":\"none\"}")
+                .respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":[{\"allWeightMetrics\":[]}]}")
+                .respond(WEIGHT_RANGE, 200, "{\"dailyWeightSummaries\":[{\"summaryDate\":\"14 Nov\"}]}")
+                .respond(WEIGHT_RANGE, 200,
+                        "{\"dailyWeightSummaries\":[{\"summaryDate\":\"2026-11-14\",\"allWeightMetrics\":{}}]}")
+                .respond(WEIGHT_RANGE, 200,
+                        "{\"dailyWeightSummaries\":[{\"summaryDate\":\"2026-11-14\",\"allWeightMetrics\":[75800]}]}");
+
+        for (int i = 0; i < 6; i++) {
+            assertThat(catchThrowable(() -> client.weighIns(OCT_22, NOV_20)))
+                    .isExactlyInstanceOf(UnexpectedReplyException.class)
+                    .hasMessageContaining("the weigh-ins from 2026-10-22 to 2026-11-20");
+        }
+    }
+
+    @Test
+    void rangeWeighInsAllowAYear() {
+        signedInAs("{}");
+        LocalDate from = NOV_20.minusDays(GarminDataConfig.MAX_WEIGHT_RANGE_DAYS - 1);
+        String path = "/weight-service/weight/range/" + from + "/2026-11-20";
+        garmin.respond(path, 200, "{}");
+
+        assertThat(client.weighIns(from, NOV_20)).isEmpty();
+        assertThat(garmin.requests(path)).hasSize(1);
+    }
+
+    @Test
+    void rangeWeighInsAllowAYearToTheSameDateAcross29February() {
+        signedInAs("{}");
+        // 2027-03-01 to 2028-03-01 includes 29 February 2028: 367 days with both ends counted.
+        String path = "/weight-service/weight/range/2027-03-01/2028-03-01";
+        garmin.respond(path, 200, "{}");
+
+        assertThat(client.weighIns(LocalDate.of(2027, 3, 1), LocalDate.of(2028, 3, 1))).isEmpty();
+        assertThat(garmin.requests(path)).hasSize(1);
+        assertThat(catchThrowable(() -> client.weighIns(LocalDate.of(2027, 2, 28), LocalDate.of(2028, 3, 1))))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("more than 367 days");
+    }
+
+    @Test
+    void rangeWeighInsRefuseMoreThanAYearOrABackwardsRangeAndSendNothing() {
+        LocalDate tooEarly = NOV_20.minusDays(GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+
+        assertThat(catchThrowable(() -> client.weighIns(tooEarly, NOV_20)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("more than 367 days");
+        assertThat(catchThrowable(() -> client.weighIns(NOV_20, OCT_22)))
+                .isExactlyInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Put the earlier date first");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void rangeWeighInsAreAskedForOnceOnA429OrA403() {
+        signedInAs("{}");
+        garmin.respond(WEIGHT_RANGE, 429, "").respond(WEIGHT_RANGE, 403, "<html>blocked</html>");
+
+        assertThat(catchThrowable(() -> client.weighIns(OCT_22, NOV_20))).isInstanceOf(RateLimitedException.class);
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+        assertThat(catchThrowable(() -> client.weighIns(OCT_22, NOV_20)))
+                .isInstanceOf(GarminException.class)
+                .hasMessageContaining("HTTP 403");
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(2);
     }
 
     // Dates and the profile

@@ -32,8 +32,9 @@ import tools.jackson.databind.node.ObjectNode;
  * body, never headers or tokens.
  * <p>
  * The last four calls (the range calls and the activity types, added 20 November 2026 for phases 4a and 4b) are
- * replies nobody has seen yet. So they're saved raw, never parsed, and one of them failing doesn't stop the others:
- * it goes in {@link Capture#failures()}.
+ * saved raw, never parsed, and one of them failing doesn't stop the others: it goes in {@link Capture#failures()}.
+ * The weight range has been seen and is parsed by the client since 20 November 2026; the other three are replies
+ * nobody has seen yet.
  */
 public class GarminSamples {
 
@@ -243,7 +244,8 @@ public class GarminSamples {
             fetch(WEIGHT_NONE, GarminDataConfig.fill(config.weighInsPath(), EMPTY_DAY.toString()),
                     config.weighInsQuery());
 
-            // Replies not seen yet: saved raw, and one failing doesn't stop the rest.
+            // Saved raw, and one failing doesn't stop the rest. The weight range was seen 20 November 2026; the
+            // summary range, sleep range and activity types are replies not seen yet.
             LocalDate weightFrom = today.minusDays(WEIGHT_RANGE_DAYS - 1);
             fetchNew(WEIGHT_RANGE,
                     GarminDataConfig.fill(config.weighInsRangePath(), weightFrom.toString(), today.toString()),

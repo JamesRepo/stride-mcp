@@ -80,7 +80,7 @@ Weight           75.4 kg (latest of 2 weigh-ins)
 
 A day with no data at all prints `No data recorded for Sat 24 Oct 2026.` Floors are rounded down, because Garmin counts part floors.
 
-See [Sleep and weight in the summary](#sleep-and-weight-in-the-summary-added-25-october-2026) for the last two parts. The weigh-ins above are made up: no real one has been captured yet.
+See [Sleep and weight in the summary](#sleep-and-weight-in-the-summary-added-25-october-2026) for the last two parts. The weigh-ins above are made up (`Fixtures.TWO_WEIGH_INS`).
 
 ```
 $ stride-mcp sleep 2026-10-23
@@ -130,7 +130,7 @@ All of these are `GET` requests to `https://connectapi.garmin.com`, with the sam
 | **Its laps** | `/activity-service/activity/{activityId}/splits` | | Laps are in `lapDTOs`. |
 | **Daily summary** | `/usersummary-service/usersummary/daily/{displayName}` | `calendarDate` (YYYY-MM-DD) | `privacyProtected: true` means Garmin refused. |
 | **Sleep** | `/wellness-service/wellness/dailySleepData/{displayName}` | `date` (YYYY-MM-DD), `nonSleepBufferMinutes=60` | Main data in `dailySleepDTO`. |
-| **Weigh-ins** | `/weight-service/weight/dayview/{date}` | `includeAll=true` | Added 25 October 2026. One day's weigh-ins in `dateWeightList`. Masses in grams (to confirm with a real weigh-in). |
+| **Weigh-ins** | `/weight-service/weight/dayview/{date}` | `includeAll=true` | Added 25 October 2026. One day's weigh-ins in `dateWeightList`. Masses in grams (confirmed 20 November 2026). |
 
 What python-garminconnect does that we copy (as behaviour, not code):
 
@@ -383,7 +383,8 @@ A CLI run is one short process, so a memory-only cache would be empty each time.
 | Activity list, range includes today or yesterday | 10 minutes | A new activity can sync at any time |
 | Daily summary, sleep or weigh-ins, today or yesterday | 15 minutes | Still changing as the watch or scale syncs |
 | Daily summary, sleep or weigh-ins, older days | 30 days | Finished |
-| An empty reply for an older day | 1 hour | A watch might sync old data late |
+| Weigh-ins over a range ending before yesterday (phase 4a, added 20 November 2026) | 1 day | A weight typed in later for a day in the range should show by the next day |
+| An empty reply for an older day, or an empty older range of weigh-ins | 1 hour | A watch might sync old data late |
 | Errors | Never cached | |
 
 ```mermaid
@@ -618,7 +619,16 @@ The owner asked for `summary` to show the day's sleep and weight too. It now mak
 | Top-level keys | `startDate`, `endDate`, `dateWeightList`, `totalAverage` |
 | `totalAverage` keys | `weight`, `bmi`, `bodyFat`, `bodyWater`, `boneMass`, `muscleMass`, `physiqueRating`, `visceralFat`, `metabolicAge` (all null), plus `from` and `until` (epoch milliseconds) |
 
-**Still to confirm:** the fields of one weigh-in in `dateWeightList` (`timestampGMT`, and the same names as `totalAverage`) and that masses are in grams. They follow python-garminconnect, and `totalAverage` uses the same names, but no day with a weigh-in has been captured. The tests use a made-up one (`Fixtures.TWO_WEIGH_INS`). To confirm: weigh in, run `capture` into a new folder, and send a stripped `weight-today.json`.
+**Confirmed 20 November 2026**, from a capture after the owner weighed in on a Garmin Index scale:
+
+| Finding | |
+|---|---|
+| One weigh-in's fields | `weight`, `bmi`, `bodyFat`, `bodyWater`, `muscleMass`, `boneMass`, `visceralFat`, `metabolicAge`, `physiqueRating`, plus `samplePk`, `calendarDate`, `date` (clock time), `timestampGMT` (epoch milliseconds), `sourceType` and `weightDelta`. The parser's guesses were right: nothing to fix. |
+| Masses | **Grams**, as guessed: `weight` and `muscleMass` are 5 digits, `boneMass` 4 |
+| This scale doesn't send | `visceralFat`, `metabolicAge`, `physiqueRating` (null) |
+| `sourceType` | `INDEX_SCALE` for the scale, `USER_SETTING` for a weight typed in on Garmin Connect (no body composition) |
+
+`weight-today.json` is now a fixture, stripped, with made-up body values. `Fixtures.TWO_WEIGH_INS` stays for a day with two weigh-ins and different values.
 
 ## Credit
 

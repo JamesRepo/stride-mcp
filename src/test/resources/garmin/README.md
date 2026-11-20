@@ -12,6 +12,8 @@ Real replies from Garmin Connect, captured with `stride-mcp capture` on 23 Octob
 | `sleep-last-night.json` | The night of 22–23 October |
 | `sleep-none.json` | 1 January 2000: a 200 whose `dailySleepDTO` fields are all null |
 | `weight-none.json` | 1 January 2000: a 200 with an empty `dateWeightList` and an all-null `totalAverage`. Captured 25 October 2026, unchanged. |
+| `weight-today.json` | 20 November 2026: one weigh-in from an Index scale. Captured 20 November 2026. |
+| `weight-range.json` | 22 October to 20 November 2026 (`/weight-service/weight/range/{from}/{to}`). Captured 20 November 2026. Trimmed from 14 days to 4: the newest two, the oldest, and 14 November, which has two weights typed in (`USER_SETTING`) 4 seconds apart. |
 
 How they were changed from the raw replies:
 
@@ -21,4 +23,6 @@ How they were changed from the raw replies:
 
 Made-up variants (missing fields, odd values) live in the tests themselves, not here.
 
-No real day **with** weigh-ins has been captured yet (25 October 2026: the owner hadn't weighed in). Until one is, the tests use a made-up one: `Fixtures.TWO_WEIGH_INS`. Replace it with a stripped `weight-today.json` from `capture`.
+- **Weigh-ins (20 November 2026):** every weight, BMI, body fat, body water, muscle and bone mass, and `weightDelta` replaced with made-up values, and `samplePk` renumbered. Dates, times, `sourceType` and nulls are real. In the range, each day's `latestWeight`, `minWeight` and `maxWeight` are rebuilt from the made-up values.
+
+`Fixtures.TWO_WEIGH_INS` is a made-up day with a scale reading and a weight typed in. It's still used where a test needs two different weigh-ins on one day.

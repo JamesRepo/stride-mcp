@@ -10,8 +10,8 @@ import java.time.LocalDate;
  * @param time                when it was recorded
  * @param bodyFatPercent      0–100
  * @param bodyWaterPercent    0–100
- * @param muscleMassKilograms skeletal muscle mass. Garmin sends a mass, not a percentage (python-garminconnect,
- *                            October 2026; not yet seen in a real weigh-in).
+ * @param muscleMassKilograms skeletal muscle mass. Garmin sends a mass in grams, not a percentage (seen in a real
+ *                            weigh-in from an Index scale, 20 November 2026).
  * @param visceralFat         Garmin's visceral fat rating (from scales that measure it), not a mass
  * @param metabolicAgeYears   from scales that estimate it
  */

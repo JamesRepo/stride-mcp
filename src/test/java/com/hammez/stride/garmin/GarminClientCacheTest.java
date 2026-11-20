@@ -379,6 +379,34 @@ class GarminClientCacheTest {
     }
 
     @Test
+    void rangeWeighInsLastByTheirLastDayAndAnOlderRangeOnlyADay() {
+        signedIn();
+        // One weigh-in on OLDER, so it's inside every range below.
+        String range = """
+                {"dailyWeightSummaries":[{"summaryDate":"2026-10-22","allWeightMetrics":[{"weight":75600.0,
+                 "timestampGMT":1792650000000}]}]}""";
+        expectLifetime(Duration.ofMinutes(15), weightRange(OLDER, YESTERDAY), range,
+                () -> client().weighIns(OLDER, YESTERDAY));
+        // Not the 30 days of one older day: a weight typed in later should show by the next day.
+        expectLifetime(Duration.ofDays(1), weightRange(OLDER.minusDays(29), OLDER), range,
+                () -> client().weighIns(OLDER.minusDays(29), OLDER));
+        expectLifetime(Duration.ofHours(1), weightRange(OLDER.minusDays(1), OLDER), "{\"dailyWeightSummaries\":[]}",
+                () -> client().weighIns(OLDER.minusDays(1), OLDER));
+    }
+
+    @Test
+    void eachWeightRangeIsItsOwnFile() {
+        signedIn();
+        garmin.respond(weightRange(OLDER.minusDays(1), OLDER), 200, "{}")
+                .respond(weightRange(OLDER, OLDER), 200, "{}");
+
+        client().weighIns(OLDER.minusDays(1), OLDER);
+        client().weighIns(OLDER, OLDER);
+
+        assertThat(cacheFiles()).contains("weight-2026-10-21-to-2026-10-22.json", "weight-2026-10-22-to-2026-10-22.json");
+    }
+
+    @Test
     void anEmptyReplyForAnOlderDayLastsAnHour() {
         signedIn();
         // Real: a night with no sleep is a 200 with a dailySleepDTO full of nulls.
@@ -433,6 +461,10 @@ class GarminClientCacheTest {
 
     private static String weight(LocalDate date) {
         return "/weight-service/weight/dayview/" + date;
+    }
+
+    private static String weightRange(LocalDate from, LocalDate to) {
+        return "/weight-service/weight/range/" + from + "/" + to;
     }
 
     /**

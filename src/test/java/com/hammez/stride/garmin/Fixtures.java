@@ -12,8 +12,9 @@ public final class Fixtures {
     }
 
     /**
-     * A day with two weigh-ins. <b>Made up</b>, as no real reply has been captured yet: shaped as
-     * python-garminconnect reads it (October 2026). Masses in grams. Listed latest first, so tests see them sorted.
+     * A day with two weigh-ins: a scale reading and a weight typed in. <b>Made up</b>, with the field names and units
+     * of the real replies ({@code weight-today.json}, 20 November 2026). Masses in grams. Listed latest first, so
+     * tests see them sorted.
      */
     public static final String TWO_WEIGH_INS = """
             {"startDate":"2026-10-23","endDate":"2026-10-23","dateWeightList":[

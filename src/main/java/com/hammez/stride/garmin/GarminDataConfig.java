@@ -35,7 +35,8 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
  * @param weighInsPath            one day's weigh-ins, by {@code {date}} (YYYY-MM-DD)
  * @param weighInsAllParam        asks for every weigh-in that day, not just one; see {@link #weighInsQuery()}
  * @param weighInsRangePath       the weigh-ins over a range, by {@code {from}} and {@code {to}} (YYYY-MM-DD, both
- *                                included). Sent with {@link #weighInsQuery()} too. Only {@code capture} uses it so far.
+ *                                included). Sent with {@link #weighInsQuery()} too. No range limit in
+ *                                python-garminconnect (checked 20 November 2026); ours is {@link #MAX_WEIGHT_RANGE_DAYS}.
  * @param dailySummariesPath      daily summaries over a range. Only {@code capture} uses it so far.
  * @param dailySummariesStartDateParam first day of the range (YYYY-MM-DD)
  * @param dailySummariesEndDateParam   last day of the range (YYYY-MM-DD)
@@ -88,7 +89,10 @@ public record GarminDataConfig(
      *                         or scale syncs
      * @param olderDay         a daily summary, sleep or weigh-ins for an older day: finished
      * @param emptyOlderDay    an empty reply for an older day (no data, no sleep, no weigh-ins, no activities): a watch
-     *                         or scale might sync late
+     *                         or scale might sync late. Also a range of weigh-ins ending before yesterday with none.
+     * @param olderWeightRange a range of weigh-ins ending before yesterday, with some: shorter than {@code olderDay},
+     *                         as a weight typed in later for a day in the range should show by the next day (phase 4c
+     *                         catches up the health log from these). One day's weigh-ins have their own file.
      */
     public record CacheLifetimes(
             Duration profile,
@@ -97,7 +101,8 @@ public record GarminDataConfig(
             Duration recentActivities,
             Duration recentDay,
             Duration olderDay,
-            Duration emptyOlderDay) {
+            Duration emptyOlderDay,
+            Duration olderWeightRange) {
     }
 
     /**
@@ -106,6 +111,14 @@ public record GarminDataConfig(
      * {@code from}/{@code to} both check against it, and so does {@link GarminClient#activities}.
      */
     public static final int MAX_RANGE_DAYS = 90;
+
+    /**
+     * The longest range of weigh-ins, in days with both ends included, asked for in one search: a year to the same
+     * date, as it's one request to Garmin whatever the range (phase 4a). That is 366 days with both ends counted, or
+     * 367 when it includes 29 February (2027-03-01 to 2028-03-01), so any such year fits. Our rule, like
+     * {@link #MAX_RANGE_DAYS}.
+     */
+    public static final int MAX_WEIGHT_RANGE_DAYS = 367;
 
     /**
      * The date range, in days with today included, used when none is given: the CLI's {@code activities} without
@@ -159,7 +172,8 @@ public record GarminDataConfig(
                         Duration.ofMinutes(10),
                         Duration.ofMinutes(15),
                         Duration.ofDays(30),
-                        Duration.ofHours(1)));
+                        Duration.ofHours(1),
+                        Duration.ofDays(1)));
     }
 
     /**
