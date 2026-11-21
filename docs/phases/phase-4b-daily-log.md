@@ -2,7 +2,7 @@
 
 **Done when:** I ask "fill in my health log for yesterday", and the AI gets every column Garmin can supply for that day from one tool call.
 
-_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Next: step 3, the client._
+_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Step 3 done 21 November 2026: the client (`GarminClient.dailyLog`). Next: step 4, the tool and the CLI._
 
 ## What the capture showed (20 November 2026)
 
@@ -106,11 +106,11 @@ One entry per day, oldest first, with what Garmin has for it:
 (The values are made up, apart from the sleep, steps and minutes, which match the log. There's no `caloriesEaten`, because Garmin had none for 12 November.)
 
 - **`sleep`** is the night that ended on the morning of `date`, as in `get_sleep`.
-- **`activities`** are the ones that started that day, in the owner's time zone. `minutes` is the whole duration, not the moving time. (On 21 October the log has 70.1 minutes for a 1:10:03 session.)
+- **`activities`** are the ones that started that day, in the owner's time zone. Garmin's search goes by the date on the clock where the activity happened, which can differ when travelling (a run at 20:30 in New York is 01:30 the next day in London). So the search covers a day either side of the range, and only the activities that started inside it in the owner's time zone are kept (after review, 21 November 2026). `minutes` is the whole duration, not the moving time. (On 21 October the log has 70.1 minutes for a 1:10:03 session.)
 - **`group`** is Garmin's top-level type: the type's ancestor just below `all`, or the type itself if it's already top-level. So `running`, `trail_running` and `treadmill_running` are all `running`, `indoor_cycling` is `cycling`, and `strength_training` is `fitness_equipment`. A type that isn't in Garmin's list gets no `group`. An activity names its parent only as a number (`parentTypeId`: 17 is `all`, 2 is `cycling`, 29 is `fitness_equipment`), so naming it needs Garmin's list of activity types, from `/activity-service/activity/activityTypes` (seen 20 November 2026). It hardly ever changes, so it's cached for 30 days. This means 4b doesn't depend on phase 2's open question about `--type running`, but it doesn't answer it either: the list says what's below `running`, not what Garmin's search filter does.
 - **`caloriesEaten`** is the food logged for that day, in kcal, from `calories.consumedValue` in the steps reply (no extra request). It's not calories burned, and the tool description says so. A day with none, or with 0, leaves it out: nobody eats 0 kcal, so 0 means nothing was logged. Protein, carbs and fat aren't in Garmin.
 - **`weight`** is the day's weigh-in, picked as in 4a.
-- **`final`** is `false` for today: the watch and scale may still sync.
+- **`final`** is `false` for today: the watch and scale may still sync. Yesterday is `true`, although the cache still treats it as changing (15 minutes): I log yesterday each morning, after the overnight sync, so it's normally complete (the owner's choice after review, 21 November 2026).
 - Parts Garmin doesn't have are left out. A day with nothing at all is `{ "date": …, "final": true }`, so the AI can tell "no data" from "not asked".
 
 The reply speaks Garmin, not my spreadsheet. There's no `Run?` or `Gym?` here. Why: stride-mcp works with any AI app and any log, and the sheet's rules belong with the sheet. They're in [4c](phase-4c-catch-up.md).
@@ -126,8 +126,8 @@ Up to 28 days takes three range requests, whatever the number of days, plus the 
 | Steps | `/usersummary-service/v2/dailysummaries`, `startDate`, `endDate` | ✅ Used. Every day, oldest first, steps in `movement.steps.value`. |
 | Sleep | `/sleep-service/stats/sleep/daily/{from}/{to}` | ✅ Used. Every night, oldest first, with the score and time asleep. |
 | Weigh-ins | `/weight-service/weight/range/{from}/{to}` | ✅ From [4a](phase-4a-weight.md), as it is |
-| Activities | The search we already use | Already in the cache |
-| Activity types | `/activity-service/activity/activityTypes` | ✅ For `group`. Once every 30 days, not once per call. |
+| Activities | The search we already use, one day wider at each end | Already in the cache. Still about two requests for 28 days. |
+| Activity types | `/activity-service/activity/activityTypes` | ✅ For `group`. Once every 30 days, not once per call. Asked for again if an activity's type isn't in it, once per type per run. |
 
 **Range or one day at a time?** Both range replies are good enough, so there's no fallback to the one-day calls:
 
@@ -161,7 +161,12 @@ The 28-day limit is Garmin's on the sleep call (python-garminconnect, checked 20
 
 1. **Plan:** this doc.
 2. **Capture** (owner): `capture` also saves the range calls for the last 28 days and the activity types, as `summary-range.json`, `sleep-range.json` and `activity-types.json` (the weigh-ins are 4a's `weight-range.json`, 30 days). ✅ Built and tested 20 November 2026, saved raw and not parsed. ✅ Done 21 November 2026: the owner ran it on 20 November, and the replies are stripped into fixtures and settled (see [What the capture showed](#what-the-capture-showed-20-november-2026)). Both range replies are used.
-3. **Client:** range methods in `GarminClient` for steps and sleep, each with its own parser, plus the weigh-ins from 4a as they are. Activities grouped by local day, with their `group` from the activity types (cached for 30 days). Tests: `summary-range.json`, `sleep-range.json` and `activity-types.json`, the clock-change day, today's part day, a day missing from a range reply or with its values null, a type not in the list, calories eaten missing or 0 (left out), a day with three activities, an activity just after midnight, more than 28 days refused with nothing sent, 429 once with no retry.
+3. **Client:** range methods in `GarminClient` for steps and sleep, each with its own parser, plus the weigh-ins from 4a as they are. Activities grouped by local day, with their `group` from the activity types (cached for 30 days). Tests: `summary-range.json`, `sleep-range.json` and `activity-types.json`, the clock-change day, today's part day, a day missing from a range reply or with its values null, a type not in the list, calories eaten missing or 0 (left out), a day with three activities, an activity just after midnight, more than 28 days refused with nothing sent, 429 once with no retry. ✅ Done 21 November 2026, in `GarminClient`:
+   - `dailyTotals(from, to)` reads steps and calories eaten from the range of daily summaries, and `sleep(from, to)` each night from the sleep stats. Each has its own parser in `GarminReplies`. A day with nothing, or outside the range, is left out. Calories eaten of 0 or less count as none. A day Garmin marked `privacyProtected` is refused, as the one-day summary is, not shown as a day with nothing (after review, 21 November 2026; not seen in a range reply yet).
+   - `activityTypes()` gives each type's group (`ActivityTypes`). It's only asked for when there are activities. It comes from the cache for 30 days, even with `refresh`, like the profile. If an activity's type isn't in the cached list, the log asks for the list again, as Garmin may have added it (the owner's choice after review, 21 November 2026). Only once per type per run of stride-mcp, so a type Garmin never lists doesn't cost a request on every call.
+   - `dailyLog(from, to)` puts them together with the weigh-ins and the activity search: a `LogDay` for every day, oldest first, with `isFinal` false for today. An activity's day is the day it started in the owner's time zone. The search covers a day either side, so an activity recorded abroad isn't missed at either end. A day's activities are oldest first. Any request failing fails the whole call.
+   - At most `GarminDataConfig.MAX_LOG_RANGE_DAYS` (28) days, checked before anything is sent, not even the profile lookup. `capture` uses the same constant.
+   - Cached like the weigh-ins over a range: 15 minutes if the range includes today or yesterday, otherwise a day, or an hour if it had nothing. That lifetime is now `CacheLifetimes.olderRange`, as it's not only for weight any more.
 4. **Tool and CLI:** `get_daily_log`, its reply and description, and `stride-mcp log`. Tests as for the other tools, including over stdio.
 5. **Docs:** the quick start, the tool table, AGENTS.md status.
 6. **Live check** (owner): "what did Garmin record for the last week?" in Codex, which I'll use every day, then in Claude Code. Compare with the Garmin Connect app.

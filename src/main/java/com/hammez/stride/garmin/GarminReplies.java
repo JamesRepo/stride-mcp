@@ -9,6 +9,8 @@ import java.time.ZoneOffset;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.TreeMap;
@@ -86,9 +88,7 @@ final class GarminReplies {
         if (!day.isMissingNode() && !day.isObject()) {
             throw new UnexpectedReplyException(what);
         }
-        if (day.path("privacyProtected").asBoolean(false)) {
-            throw new GarminException("Garmin wouldn't share the summary for " + date + ". Run `stride-mcp login` again.");
-        }
+        refuseIfNotShared(day, date);
         return new DailySummary(
                 date,
                 whole(day, "totalSteps"),
@@ -194,6 +194,164 @@ final class GarminReplies {
             }
         }
         return sorted(weighIns);
+    }
+
+    /**
+     * Each day's steps and calories eaten over a range, oldest first, from the range of daily summaries. Seen
+     * 20 November 2026 (28 days): {@code data}, one entry per day with its {@code calendarDate}, oldest first, every
+     * day there. Its field names aren't the one-day reply's: steps are {@code movement.steps.value}, calories eaten
+     * {@code calories.consumedValue}. On a day with nothing logged, {@code consumedValue} was null (12 November).
+     * <p>
+     * A day with neither steps nor calories eaten is left out ("Garmin has nothing"), and so is a day outside
+     * {@code from}–{@code to}. Calories eaten of 0 or less count as none: nobody eats 0 kcal.
+     * <p>
+     * No entry had {@code privacyProtected} in the capture (20 November 2026), but the one-day reply can have it. So a
+     * day in the range marked with it is refused as {@link #dailySummary} refuses it, not shown as a day with nothing.
+     *
+     * @throws GarminException if Garmin marked a day in the range {@code privacyProtected}
+     */
+    static List<DayTotals> rangeTotals(JsonNode range, LocalDate from, LocalDate to, String what) {
+        var days = new ArrayList<DayTotals>();
+        for (JsonNode day : rangeEntries(range, "data", what)) {
+            LocalDate date = entryDate(day, what);
+            if (date.isBefore(from) || date.isAfter(to)) {
+                continue;
+            }
+            refuseIfNotShared(day, date);
+            Integer steps = whole(day.path("movement").path("steps"), "value");
+            Integer eaten = whole(day.path("calories"), "consumedValue");
+            if (eaten != null && eaten <= 0) {
+                eaten = null;
+            }
+            if (steps != null || eaten != null) {
+                days.add(new DayTotals(date, steps, eaten));
+            }
+        }
+        days.sort(Comparator.comparing(DayTotals::date));
+        return List.copyOf(days);
+    }
+
+    /**
+     * Each night's sleep over a range, oldest first, from the sleep stats. Seen 20 November 2026 (28 nights):
+     * {@code individualStats}, one entry per night with its {@code calendarDate} (the morning the night ended, as in
+     * {@link #sleep}) and its {@code values}, oldest first. Field names aren't the one-day reply's (see below).
+     * {@code overallStats}, the range's averages, isn't used.
+     * <p>
+     * A night whose {@code values} are missing or null, or have neither a start nor a time asleep, is left out, as in
+     * {@link #sleep}. So is a night outside {@code from}–{@code to}.
+     */
+    static List<Sleep> rangeSleep(JsonNode range, LocalDate from, LocalDate to, String what) {
+        var nights = new ArrayList<Sleep>();
+        for (JsonNode night : rangeEntries(range, "individualStats", what)) {
+            LocalDate date = entryDate(night, what);
+            JsonNode values = night.path("values");
+            if (!(values.isObject() || values.isMissingNode() || values.isNull())) {
+                throw new UnexpectedReplyException(what);
+            }
+            if (date.isBefore(from) || date.isAfter(to)) {
+                continue;
+            }
+            Instant start = epochMillis(values, "gmtSleepStartTimeInMillis");
+            // A few seconds short of deep + light + REM on some nights (seen 20 November 2026). Used as it is.
+            Integer sleepSeconds = whole(values, "totalSleepTimeInSeconds");
+            if (start == null && sleepSeconds == null) {
+                continue;
+            }
+            nights.add(new Sleep(
+                    date,
+                    start,
+                    epochMillis(values, "gmtSleepEndTimeInMillis"),
+                    sleepSeconds,
+                    whole(values, "deepTime"),
+                    whole(values, "lightTime"),
+                    whole(values, "remTime"),
+                    whole(values, "awakeTime"),
+                    percent(values, "sleepScore"),
+                    text(values, "sleepScoreQuality"),
+                    decimal(values, "respiration"),
+                    decimalPercent(values, "spO2")));
+        }
+        nights.sort(Comparator.comparing(Sleep::date));
+        return List.copyOf(nights);
+    }
+
+    /**
+     * Each type's group, from Garmin's list of activity types: a list of {@code {typeId, typeKey, parentTypeId, …}}
+     * (156 of them, seen 20 November 2026). See {@link ActivityTypes}. An entry without a whole {@code typeId} or a
+     * {@code typeKey} is skipped.
+     *
+     * @throws UnexpectedReplyException if it isn't a list, or has no type we can read, so it isn't cached for 30 days
+     */
+    static ActivityTypes activityTypes(JsonNode list, String what) {
+        if (!list.isArray()) {
+            throw new UnexpectedReplyException(what);
+        }
+        record Type(String key, Long parent) {
+        }
+        var byId = new HashMap<Long, Type>();
+        for (JsonNode entry : list) {
+            JsonNode id = entry.path("typeId");
+            String key = text(entry, "typeKey");
+            if (id.isIntegralNumber() && key != null) {
+                JsonNode parent = entry.path("parentTypeId");
+                byId.put(id.asLong(), new Type(key, parent.isIntegralNumber() ? parent.asLong() : null));
+            }
+        }
+        if (byId.isEmpty()) {
+            throw new UnexpectedReplyException(what);
+        }
+        var groups = new HashMap<String, String>();
+        for (Type type : byId.values()) {
+            // Up the tree until the parent is the root, in no more steps than there are types, so it can't loop.
+            Type current = type;
+            for (int steps = 0; current.parent() != null && steps < byId.size(); steps++) {
+                Type parent = byId.get(current.parent());
+                if (parent == null) {
+                    break;
+                }
+                if (parent.parent() == null) {
+                    groups.put(type.key(), current.key());
+                    break;
+                }
+                current = parent;
+            }
+        }
+        var listed = new HashSet<String>();
+        byId.values().forEach(type -> listed.add(type.key()));
+        return new ActivityTypes(groups, listed);
+    }
+
+    /** Refuses a summary Garmin marked {@code privacyProtected}: it isn't a day with no data. */
+    private static void refuseIfNotShared(JsonNode day, LocalDate date) {
+        if (day.path("privacyProtected").asBoolean(false)) {
+            throw new GarminException("Garmin wouldn't share the summary for " + date + ". Run `stride-mcp login` again.");
+        }
+    }
+
+    /** The list in a range reply's {@code field}. None if the reply was empty, or the list is missing or null. */
+    private static Iterable<JsonNode> rangeEntries(JsonNode range, String field, String what) {
+        if (range.isMissingNode()) {
+            return List.of();
+        }
+        JsonNode list = range.path(field);
+        if (!range.isObject() || !(list.isArray() || list.isMissingNode() || list.isNull())) {
+            throw new UnexpectedReplyException(what);
+        }
+        for (JsonNode entry : list) {
+            if (!entry.isObject()) {
+                throw new UnexpectedReplyException(what);
+            }
+        }
+        return list.isArray() ? list : List.of();
+    }
+
+    /** A range entry's {@code calendarDate}, which it must have. */
+    private static LocalDate entryDate(JsonNode entry, String what) {
+        LocalDate date = date(entry, "calendarDate", what);
+        if (date == null) {
+            throw new UnexpectedReplyException(what);
+        }
+        return date;
     }
 
     private static Listed weighIn(JsonNode entry, LocalDate date, String what) {

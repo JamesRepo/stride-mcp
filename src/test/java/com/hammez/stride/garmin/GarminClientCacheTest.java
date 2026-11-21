@@ -49,6 +49,8 @@ class GarminClientCacheTest {
     private static final String SPLITS = "/activity-service/activity/24816092240/splits";
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
+    private static final String STEPS = "/usersummary-service/v2/dailysummaries";
+    private static final String TYPES = "/activity-service/activity/activityTypes";
 
     @TempDir
     Path temp;
@@ -407,6 +409,89 @@ class GarminClientCacheTest {
     }
 
     @Test
+    void rangeStepsLastLikeTheWeightRange() {
+        signedIn();
+        String steps = "{\"data\":[{\"calendarDate\":\"2026-10-22\",\"movement\":{\"steps\":{\"value\":9000}}}]}";
+        expectLifetime(Duration.ofMinutes(15), STEPS, steps, () -> client().dailyTotals(OLDER, YESTERDAY));
+        expectLifetime(Duration.ofDays(1), STEPS, steps, () -> client().dailyTotals(OLDER.minusDays(27), OLDER));
+        expectLifetime(Duration.ofHours(1), STEPS, "{\"data\":[]}",
+                () -> client().dailyTotals(OLDER.minusDays(1), OLDER));
+    }
+
+    @Test
+    void rangeSleepLastsLikeTheWeightRange() {
+        signedIn();
+        String night = "{\"individualStats\":[{\"calendarDate\":\"2026-10-22\","
+                + "\"values\":{\"totalSleepTimeInSeconds\":27000}}]}";
+        expectLifetime(Duration.ofMinutes(15), sleepRange(OLDER, YESTERDAY), night,
+                () -> client().sleep(OLDER, YESTERDAY));
+        expectLifetime(Duration.ofDays(1), sleepRange(OLDER.minusDays(27), OLDER), night,
+                () -> client().sleep(OLDER.minusDays(27), OLDER));
+        expectLifetime(Duration.ofHours(1), sleepRange(OLDER.minusDays(1), OLDER), "{\"individualStats\":[]}",
+                () -> client().sleep(OLDER.minusDays(1), OLDER));
+    }
+
+    @Test
+    void eachStepsAndSleepRangeIsItsOwnFile() {
+        signedIn();
+        garmin.respond(STEPS, 200, "{}").respond(STEPS, 200, "{}")
+                .respond(sleepRange(OLDER.minusDays(1), OLDER), 200, "{}")
+                .respond(sleepRange(OLDER, OLDER), 200, "{}");
+
+        client().dailyTotals(OLDER.minusDays(1), OLDER);
+        client().dailyTotals(OLDER, OLDER);
+        client().sleep(OLDER.minusDays(1), OLDER);
+        client().sleep(OLDER, OLDER);
+
+        assertThat(cacheFiles()).contains("summary-2026-10-21-to-2026-10-22.json",
+                "summary-2026-10-22-to-2026-10-22.json", "sleep-2026-10-21-to-2026-10-22.json",
+                "sleep-2026-10-22-to-2026-10-22.json");
+    }
+
+    @Test
+    void aStepsRangeWithADayGarminWontShareIsNotCached() {
+        signedIn();
+        String hidden = "{\"data\":[{\"calendarDate\":\"2026-10-22\",\"privacyProtected\":true}]}";
+        garmin.respond(STEPS, 200, hidden).respond(STEPS, 200, hidden);
+
+        for (int i = 0; i < 2; i++) {
+            assertThat(catchThrowable(() -> client().dailyTotals(OLDER, OLDER)))
+                    .isExactlyInstanceOf(GarminException.class);
+        }
+
+        assertThat(garmin.requests(STEPS)).hasSize(2);
+        assertThat(cacheFiles()).noneMatch(name -> name.startsWith("summary-"));
+    }
+
+    @Test
+    void theActivityTypesLastThirtyDays() {
+        expectLifetime(Duration.ofDays(30), TYPES, fixture("activity-types.json"), () -> client().activityTypes());
+        assertThat(cacheFiles()).contains("activity-types.json");
+    }
+
+    @Test
+    void theDailyLogFetchesTheActivityTypesOnceThenTakesThemFromTheCacheEvenWhenSkippingIt() {
+        signedIn();
+        String run = "[{\"activityId\":1,\"activityType\":{\"typeKey\":\"trail_running\"},"
+                + "\"startTimeGMT\":\"2026-10-22 07:00:00\"}]";
+        garmin.respond(TYPES, 200, fixture("activity-types.json"));
+        for (int i = 0; i < 2; i++) {
+            garmin.respond(STEPS, 200, "{}").respond(sleepRange(OLDER, OLDER), 200, "{}")
+                    .respond(weightRange(OLDER, OLDER), 200, "{}").respond(ACTIVITIES, 200, run);
+        }
+
+        var first = client().dailyLog(OLDER, OLDER);
+        var again = client().skippingCache().dailyLog(OLDER, OLDER);
+
+        assertThat(first).isEqualTo(again);
+        assertThat(again.getFirst().activities().getFirst().group()).isEqualTo("running");
+        assertThat(garmin.requests(TYPES)).hasSize(1);
+        // Everything else was asked for again.
+        assertThat(garmin.requests(STEPS)).hasSize(2);
+        assertThat(garmin.requests(ACTIVITIES)).hasSize(2);
+    }
+
+    @Test
     void anEmptyReplyForAnOlderDayLastsAnHour() {
         signedIn();
         // Real: a night with no sleep is a 200 with a dailySleepDTO full of nulls.
@@ -465,6 +550,10 @@ class GarminClientCacheTest {
 
     private static String weightRange(LocalDate from, LocalDate to) {
         return "/weight-service/weight/range/" + from + "/" + to;
+    }
+
+    private static String sleepRange(LocalDate from, LocalDate to) {
+        return "/sleep-service/stats/sleep/daily/" + from + "/" + to;
     }
 
     /**

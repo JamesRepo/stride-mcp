@@ -37,14 +37,14 @@ import com.hammez.stride.garmin.auth.GarminAuthConfig;
  * @param weighInsRangePath       the weigh-ins over a range, by {@code {from}} and {@code {to}} (YYYY-MM-DD, both
  *                                included). Sent with {@link #weighInsQuery()} too. No range limit in
  *                                python-garminconnect (checked 20 November 2026); ours is {@link #MAX_WEIGHT_RANGE_DAYS}.
- * @param dailySummariesPath      daily summaries over a range. Only {@code capture} uses it so far.
+ * @param dailySummariesPath      daily summaries over a range, oldest first. At most {@link #MAX_LOG_RANGE_DAYS}.
  * @param dailySummariesStartDateParam first day of the range (YYYY-MM-DD)
  * @param dailySummariesEndDateParam   last day of the range (YYYY-MM-DD)
  * @param sleepStatsPath          each night's sleep stats over a range, by {@code {from}} and {@code {to}}
  *                                (YYYY-MM-DD). Garmin allows at most 28 days (python-garminconnect, checked
- *                                20 November 2026). Only {@code capture} uses it so far.
- * @param activityTypesPath       Garmin's list of activity types, with each one's parent. Only {@code capture} uses
- *                                it so far.
+ *                                20 November 2026), so {@link #MAX_LOG_RANGE_DAYS}.
+ * @param activityTypesPath       Garmin's list of activity types, with each one's parent, for an activity's group
+ *                                (phase 4b)
  * @param cacheLifetimes          how long the cache keeps each kind of reply
  */
 public record GarminDataConfig(
@@ -89,10 +89,13 @@ public record GarminDataConfig(
      *                         or scale syncs
      * @param olderDay         a daily summary, sleep or weigh-ins for an older day: finished
      * @param emptyOlderDay    an empty reply for an older day (no data, no sleep, no weigh-ins, no activities): a watch
-     *                         or scale might sync late. Also a range of weigh-ins ending before yesterday with none.
-     * @param olderWeightRange a range of weigh-ins ending before yesterday, with some: shorter than {@code olderDay},
-     *                         as a weight typed in later for a day in the range should show by the next day (phase 4c
-     *                         catches up the health log from these). One day's weigh-ins have their own file.
+     *                         or scale might sync late. Also a range (weigh-ins, steps or sleep) ending before
+     *                         yesterday with nothing in it.
+     * @param olderRange       a range of weigh-ins, steps or sleep ending before yesterday, with something in it:
+     *                         shorter than {@code olderDay}, as a weight typed in later, or a late sync, for a day in
+     *                         the range should show by the next day (phase 4c catches up the health log from these).
+     *                         One day's replies have their own files.
+     * @param activityTypes    Garmin's list of activity types: it hardly ever changes (phase 4b)
      */
     public record CacheLifetimes(
             Duration profile,
@@ -102,7 +105,8 @@ public record GarminDataConfig(
             Duration recentDay,
             Duration olderDay,
             Duration emptyOlderDay,
-            Duration olderWeightRange) {
+            Duration olderRange,
+            Duration activityTypes) {
     }
 
     /**
@@ -119,6 +123,14 @@ public record GarminDataConfig(
      * {@link #MAX_RANGE_DAYS}.
      */
     public static final int MAX_WEIGHT_RANGE_DAYS = 367;
+
+    /**
+     * The longest range, in days with both ends included, for the daily log ({@link GarminClient#dailyLog}) and the
+     * range calls it makes for steps and sleep. Garmin's own limit on the sleep stats (python-garminconnect, checked
+     * 20 November 2026), so each kind of data is one request per call (phase 4b). Our rule, like
+     * {@link #MAX_RANGE_DAYS}.
+     */
+    public static final int MAX_LOG_RANGE_DAYS = 28;
 
     /**
      * The date range, in days with today included, used when none is given: the CLI's {@code activities} without
@@ -179,7 +191,8 @@ public record GarminDataConfig(
                         Duration.ofMinutes(15),
                         Duration.ofDays(30),
                         Duration.ofHours(1),
-                        Duration.ofDays(1)));
+                        Duration.ofDays(1),
+                        Duration.ofDays(30)));
     }
 
     /**

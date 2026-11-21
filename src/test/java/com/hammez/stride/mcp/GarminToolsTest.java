@@ -153,7 +153,7 @@ class GarminToolsTest {
                 + "for the last 30 days, today included. A range ending before yesterday is cached for a day, or an "
                 + "hour if it had no weigh-ins. The reply also gives today's date in the owner's time zone.");
         assertThat(lifetimes.emptyOlderDay()).isEqualTo(Duration.ofHours(1));
-        assertThat(lifetimes.olderWeightRange()).isEqualTo(Duration.ofDays(1));
+        assertThat(lifetimes.olderRange()).isEqualTo(Duration.ofDays(1));
     }
 
     @Test

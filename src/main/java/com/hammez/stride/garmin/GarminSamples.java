@@ -67,7 +67,7 @@ public class GarminSamples {
      * Days in {@link #SUMMARY_RANGE} and {@link #SLEEP_RANGE}, today included: Garmin's limit for the sleep stats
      * (python-garminconnect's {@code get_sleep_daily}, checked 20 November 2026).
      */
-    static final int DAILY_RANGE_DAYS = 28;
+    static final int DAILY_RANGE_DAYS = GarminDataConfig.MAX_LOG_RANGE_DAYS;
 
     /** A day long before Garmin Connect existed, so it should have no data. */
     private static final LocalDate EMPTY_DAY = LocalDate.of(2000, 1, 1);

@@ -8,11 +8,15 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -27,7 +31,8 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 /**
- * Reads my Garmin data: activities, one activity's details, daily summaries, sleep and weigh-ins.
+ * Reads my Garmin data: activities, one activity's details, daily summaries, sleep and weigh-ins, and the daily log
+ * that puts them together (phase 4b).
  * Reads {@link GarminCache} first, and calls Garmin through {@link GarminApi} only when there's no fresh copy,
  * so it never sees a token. Lifetimes are in {@link CacheLifetimes}. Errors are never cached.
  * <p>
@@ -38,6 +43,7 @@ public class GarminClient {
 
     private static final String SOCIAL_PROFILE = "social-profile";
     private static final String PERSONAL_INFORMATION = "personal-information";
+    private static final String ACTIVITY_TYPES = "activity-types";
 
     private final GarminApi api;
     private final GarminCache cache;
@@ -93,6 +99,11 @@ public class GarminClient {
     private static final class Memory {
         private volatile Remembered me;
         private final SingleFlight<Me> lookUp = new SingleFlight<>();
+        /**
+         * Activity types the list was asked for again because they weren't in it (see {@link #dailyLog}). So a type
+         * Garmin never lists costs one extra request per run, not one per call.
+         */
+        private final Set<String> typesAskedAgainFor = ConcurrentHashMap.newKeySet();
     }
 
     /**
@@ -278,12 +289,174 @@ public class GarminClient {
                 found -> rangeLifetime(to, me, found.isEmpty()));
     }
 
-    /** Like {@link #dayLifetime}, except that a range ending before yesterday with weigh-ins lasts a day. */
+    /**
+     * Each day's steps and calories eaten on {@code from} to {@code to} (both included), oldest first, from the range
+     * of daily summaries: one request, whatever the range. A day with neither is left out, as are days Garmin sends
+     * outside the range. Cached as {@link #weighIns(LocalDate, LocalDate)} is.
+     *
+     * @return empty if Garmin had nothing
+     * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
+     *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS}. A safety net, so nothing is sent to Garmin.
+     */
+    public List<DayTotals> dailyTotals(LocalDate from, LocalDate to) {
+        checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
+        String what = "the daily summaries from " + from + " to " + to;
+        Me me = me();
+        return cached("summary-" + from + "-to-" + to, !skipCache,
+                () -> api.get(config.dailySummariesPath(), Map.of(
+                        config.dailySummariesStartDateParam(), from.toString(),
+                        config.dailySummariesEndDateParam(), to.toString())),
+                body -> GarminReplies.rangeTotals(parse(body, what), from, to, what),
+                found -> rangeLifetime(to, me, found.isEmpty()));
+    }
+
+    /**
+     * The nights that ended on the mornings of {@code from} to {@code to} (both included), oldest first, from the
+     * sleep stats: one request, whatever the range. A night with no sleep is left out, as are nights Garmin sends
+     * outside the range. Cached as {@link #weighIns(LocalDate, LocalDate)} is.
+     *
+     * @return empty if no sleep was recorded
+     * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
+     *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS} (Garmin's limit). A safety net, so nothing is sent to Garmin.
+     */
+    public List<Sleep> sleep(LocalDate from, LocalDate to) {
+        checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
+        String what = "the sleep for the nights ending " + from + " to " + to;
+        Me me = me();
+        String path = GarminDataConfig.fill(config.sleepStatsPath(), from.toString(), to.toString());
+        return cached("sleep-" + from + "-to-" + to, !skipCache,
+                () -> api.get(path, Map.of()),
+                body -> GarminReplies.rangeSleep(parse(body, what), from, to, what),
+                found -> rangeLifetime(to, me, found.isEmpty()));
+    }
+
+    /**
+     * Each activity type's group, from Garmin's list of activity types. It hardly ever changes, so it comes from the
+     * cache for {@link CacheLifetimes#activityTypes()}, even from a client {@link #skippingCache() skipping the cache}:
+     * like the profile, it only says how to read the other replies.
+     */
+    public ActivityTypes activityTypes() {
+        return activityTypes(true);
+    }
+
+    /** @param useCache false to ask Garmin even if the cache has a fresh copy. The new list is cached either way. */
+    private ActivityTypes activityTypes(boolean useCache) {
+        String what = "Garmin's list of activity types";
+        return cached(ACTIVITY_TYPES, useCache,
+                () -> api.get(config.activityTypesPath(), Map.of()),
+                body -> GarminReplies.activityTypes(parse(body, what), what),
+                types -> lifetimes().activityTypes());
+    }
+
+    /**
+     * Everything Garmin has for each day of the health log, {@code from} to {@code to} (both included), oldest first,
+     * with an entry for every day, even one with nothing (phase 4b). From the range replies for steps, sleep and
+     * weigh-ins, the activity search, and the activity types if there are any activities: about five requests for
+     * 28 days, and none for what is cached. Any of them failing fails the whole call: nothing is half-filled.
+     * <p>
+     * An activity's day is the day it started in the owner's time zone (the Garmin profile's), or the day on the
+     * clock where it happened if Garmin left out the exact time. One with neither is left out. The search covers a
+     * day either side of the range, so an activity recorded abroad still lands on its day; any that start outside
+     * the range in the owner's time zone are left out. That's enough for any two time zones less than 24 hours apart.
+     * <p>
+     * If an activity's type isn't in the cached list of activity types, the list is asked for again, once, as Garmin
+     * may have added it (the owner's choice, 21 November 2026). Only once per type per run, so a type Garmin never
+     * lists doesn't cost a request on every call: it just has no group.
+     *
+     * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
+     *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS}. Callers check their own input first; this is a safety net,
+     *         so nothing is sent to Garmin, not even the profile lookup.
+     */
+    public List<LogDay> dailyLog(LocalDate from, LocalDate to) {
+        checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
+        Me me = me();
+        Map<LocalDate, DayTotals> totals = byDate(dailyTotals(from, to), DayTotals::date);
+        Map<LocalDate, Sleep> nights = byDate(sleep(from, to), Sleep::date);
+        Map<LocalDate, DayWeight> weights = byDate(DayWeight.byDay(weighIns(from, to)), DayWeight::date);
+        // Garmin's search goes by the date on the clock where the activity happened, which can be a day either side
+        // of its day in the owner's time zone when travelling. So search a day wider, and keep what's in the range.
+        List<ActivitySummary> found = activities(from.minusDays(1), to.plusDays(1), null).stream()
+                .filter(a -> {
+                    LocalDate day = startDay(a, me.zone());
+                    return day != null && !day.isBefore(from) && !day.isAfter(to);
+                })
+                .sorted(Comparator.comparing((ActivitySummary a) -> startedAt(a, me.zone()),
+                        Comparator.nullsLast(Comparator.naturalOrder())))
+                .toList();
+        ActivityTypes types = activityTypesFor(found);
+
+        var activities = new HashMap<LocalDate, List<LogDay.Activity>>();
+        for (ActivitySummary a : found) {
+            activities.computeIfAbsent(startDay(a, me.zone()), d -> new ArrayList<>())
+                    .add(new LogDay.Activity(a, types.group(a.type())));
+        }
+
+        LocalDate today = today(me);
+        var days = new ArrayList<LogDay>();
+        for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
+            DayTotals day = totals.get(date);
+            days.add(new LogDay(date, date.isBefore(today), nights.get(date),
+                    day == null ? null : day.steps(),
+                    day == null ? null : day.caloriesEaten(),
+                    activities.getOrDefault(date, List.of()),
+                    weights.get(date)));
+        }
+        return List.copyOf(days);
+    }
+
+    /**
+     * The activity types for these activities: none needed if there are none. Asked for again if one has a type the
+     * cached list doesn't have and that hasn't been asked again for in this run.
+     */
+    private ActivityTypes activityTypesFor(List<ActivitySummary> found) {
+        if (found.isEmpty()) {
+            return new ActivityTypes(Map.of(), Set.of());
+        }
+        ActivityTypes types = activityTypes(true);
+        Set<String> missing = new HashSet<>();
+        for (ActivitySummary activity : found) {
+            if (activity.type() != null && !types.lists(activity.type())) {
+                missing.add(activity.type());
+            }
+        }
+        // addAll is true if any of them is new to this run.
+        return remembered.typesAskedAgainFor.addAll(missing) ? activityTypes(false) : types;
+    }
+
+    /** By their day. A day listed twice keeps its first entry: never seen, so this only stops a crash. */
+    private static <T> Map<LocalDate, T> byDate(List<T> found, Function<T, LocalDate> date) {
+        var byDate = new HashMap<LocalDate, T>();
+        for (T value : found) {
+            byDate.putIfAbsent(date.apply(value), value);
+        }
+        return byDate;
+    }
+
+    /** When the activity started: the exact moment, or the clock time where it happened read in {@code zone}. */
+    private static Instant startedAt(ActivitySummary activity, ZoneId zone) {
+        if (activity.start() != null) {
+            return activity.start();
+        }
+        return activity.startLocal() == null ? null : activity.startLocal().atZone(zone).toInstant();
+    }
+
+    /** The day the activity started in {@code zone}, or on the clock where it happened if there's no exact time. */
+    private static LocalDate startDay(ActivitySummary activity, ZoneId zone) {
+        if (activity.start() != null) {
+            return LocalDate.ofInstant(activity.start(), zone);
+        }
+        return activity.startLocal() == null ? null : activity.startLocal().toLocalDate();
+    }
+
+    /**
+     * Like {@link #dayLifetime}, except that a range ending before yesterday with something in it lasts a day
+     * ({@link CacheLifetimes#olderRange()}).
+     */
     private Duration rangeLifetime(LocalDate to, Me me, boolean empty) {
         if (!to.isBefore(today(me).minusDays(1))) {
             return lifetimes().recentDay();
         }
-        return empty ? lifetimes().emptyOlderDay() : lifetimes().olderWeightRange();
+        return empty ? lifetimes().emptyOlderDay() : lifetimes().olderRange();
     }
 
     /** Refuses a range that is backwards or longer than {@code maxDays}, both ends included. */
