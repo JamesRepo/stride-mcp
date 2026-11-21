@@ -158,7 +158,7 @@ From the owner's `capture` run. The fixtures made from it are in `src/test/resou
 
 The newest activity in the samples was a stair stepper session, so a run's detail fields weren't seen there: cadence, power and per-lap elevation. The parser accepts the likely names (`averageRunCadence`, `averagePower`, `elevationGain`) and the list's names (`averageRunningCadenceInStepsPerMinute`, `avgPower`). **Confirmed 24 October 2026:** the live check's real run showed all three, so one of these names matches. Which one isn't known, because no sample of a run was captured.
 
-**Still to confirm:** whether `activityType=running` also returns trail and treadmill runs. The owner had none in the last 90 days.
+**Still to confirm:** whether `activityType=running` also returns trail and treadmill runs. The owner had none in the last 90 days. Garmin's list of activity types (captured 20 November 2026) puts `trail_running`, `treadmill_running` and 7 more types under `running`, but that's the tree, not what the search filter does. [Phase 4b](phase-4b-daily-log.md)'s `group` uses the tree, so `get_daily_log` doesn't depend on the answer.
 
 ### What the live check showed (24 October 2026)
 

@@ -54,11 +54,13 @@ From `get_daily_log`'s reply ([4b](phase-4b-daily-log.md)) to the columns:
 | Sessions | How many activities |
 | Run? | 1 if any activity's `group` is `running`, otherwise 0 |
 | Gym? | 1 if any is `strength_training`, otherwise 0 |
-| Football? | 1 if any is `soccer`, otherwise 0 (Garmin's word, to check) |
+| Football? | 1 if any is `soccer`, otherwise 0. Garmin's word: `soccer` is in its list of activity types, and `american_football` is a different type (seen 20 November 2026). |
 | Exercise Mins | All the activities' `minutes` added up, except walks, 1 decimal place. (The `reference` tab says walking counts in Steps, not here. Hikes count.) |
 | Steps | `steps` |
 | Weight (kg), Body Fat %, Muscle (kg) | `weight.kg`, `weight.bodyFatPercent`, `weight.muscleMassKg` |
 | Fat Mass (kg) | Weight × Body Fat % ÷ 100, 1 decimal place. Only when both are there. |
+| Calories | `caloriesEaten`, a whole number. Left blank when it isn't there. Never Garmin's calories burned. (Owner's choice, 21 November 2026. It's MyFitnessPal's daily total: it matched this column on every day that has both, to within 1 kcal.) |
+| Protein (g), Carbs (g), Fat (g) | Never: Garmin doesn't have them. I fill them in. |
 
 Activity names. The log has used two sets. From now on it uses Garmin's names, as it has since October 2026 (owner's choice, 20 November 2026). Older rows keep Run, Gym and Hike.
 
@@ -75,11 +77,11 @@ So `running` is "Running", `treadmill_running` is "Treadmill Running", and `hiki
 ## How a catch-up works
 
 1. Read `daily_log` and the rules.
-2. Find the days up to yesterday where **any** of Sleep Score, Steps or Activities is blank. So a day filled in halfway still gets finished. A blank weight is normal (no weigh-in), so it doesn't count, but it's filled in if Garmin has one. Today is never logged: it isn't over.
+2. Find the days up to yesterday where **any** of Sleep Score, Steps or Activities is blank. So a day filled in halfway still gets finished. A blank weight is normal (no weigh-in), so it doesn't count, but it's filled in if Garmin has one. Calories are the same: a day with no food logged is blank in both places. Today is never logged: it isn't over.
 3. Find each day's row **by its date, not its position**. Rows aren't always in order (see below).
 4. Ask `get_daily_log` for those days, oldest first, 28 days a call.
 5. Show me a table: each day, and each cell it will fill.
-6. On my yes, fill in **blank cells only**. A cell that already has a different value is listed, not changed. It may be something I typed in.
+6. On my yes, fill in **blank cells only**. A cell that already has a different value is listed, not changed. It may be something I typed in. Calories 1 kcal apart count as the same: Garmin rounds MyFitnessPal's total a little differently (2, 4 and 13 November, seen 21 November 2026).
 7. A day with no row gets a new row at the bottom, as the `reference` tab says, with the date columns filled in too.
 8. Never write the columns Garmin doesn't supply.
 
@@ -112,6 +114,7 @@ What a catch-up has to cope with:
 | Activity names | ✅ Garmin's names (Running, Strength and the others above) from now on. The old rows stay as they are (owner's choice, 20 November 2026). |
 | Which night goes with a date | ✅ The night that ended that morning (owner confirmed, 20 November 2026) |
 | Overwrite filled cells? | Never. List the ones that differ. |
+| Fill Calories from Garmin? | ✅ Yes, from `caloriesEaten`, blank cells only (owner's choice, 21 November 2026). Protein, carbs and fat stay mine. |
 | Default reach | From the last fully filled day, at most 90 days |
 | Tidy the old rows (`Gym?`, Fat Mass)? | A separate, one-off clean-up, if I want it. Not part of the catch-up. (The names stay as they are.) |
 
@@ -120,7 +123,7 @@ What a catch-up has to cope with:
 1. **Plan:** this doc.
 2. **Rules:** once I approve them, add the "Garmin columns" section to the `reference` tab (through the Sheets connection, with my OK).
 3. **Tool description:** `get_daily_log`'s description says that a log's own rules decide how its columns are filled, so the AI looks for them.
-4. **First catch-up** (owner, watching): 31 October to 20 November **in Codex**, the app I'll use every day. Check the preview against the Garmin Connect app before saying yes.
+4. **First catch-up** (owner, watching): 31 October to 20 November **in Codex**, the app I'll use every day. Check the preview against the Garmin Connect app before saying yes, and any low calories against MyFitnessPal: Garmin has 387 for 5 November and 1,227 for 14 November, maybe days only partly logged.
 5. **A normal day** (owner): "log yesterday" in Codex the next morning. One tool call, one row.
 6. **Docs:** a short "Fill in a spreadsheet" section in the quick start, with the Codex setup. AGENTS.md status.
 7. **Try it in Claude Code** (owner): one day, to show it doesn't rely on Codex.

@@ -2,7 +2,7 @@
 
 **Done when:** I ask "how has my weight changed since September?" and get an answer built from my Garmin scale's weigh-ins.
 
-_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner chose which weigh-in counts (✅) and approved the rest as proposed. Step 2 done 20 November 2026: the owner's capture confirmed the field names and grams (see [What the capture showed](#what-the-capture-showed-20-november-2026)). Step 3 done 20 November 2026: `GarminClient.weighIns(from, to)`. Steps 4 and 5 done 20 November 2026: `get_weight`, `stride-mcp weight`, the first weigh-in everywhere, and the docs. Next: step 6, the owner's live check._
+_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner chose which weigh-in counts (✅) and approved the rest as proposed. Step 2 done 20 November 2026: the owner's capture confirmed the field names and grams (see [What the capture showed](#what-the-capture-showed-20-november-2026)). Step 3 done 20 November 2026: `GarminClient.weighIns(from, to)`. Steps 4 and 5 done 20 November 2026: `get_weight`, `stride-mcp weight`, the first weigh-in everywhere, and the docs. Step 6 done 21 November 2026: **phase 4a is done** (see [Live check](#live-check-21-november-2026))._
 
 ## What the capture showed (20 November 2026)
 
@@ -108,7 +108,21 @@ Cache: if the range includes today or yesterday, 15 minutes (the scale may still
 3. **Client:** `GarminClient.weighIns(from, to)`, with the path in `GarminDataConfig`, the cache, and fixtures. Tests: the reply from the capture, no weigh-ins, a day with two, a range over the limit refused with nothing sent, and 429 and 403 once with no retry. ✅ Done 20 November 2026. Every weigh-in in the range, oldest first, each with its day; the limit is `GarminDataConfig.MAX_WEIGHT_RANGE_DAYS`; cached as `weight-<from>-to-<to>.json`. After review (20 November 2026): days outside the range are left out, a weigh-in with no time sorts last in its day so it can't become the day's weight, a day is sorted by one time field only (see below), and the limit is 367.
 4. **Tool and CLI:** `get_weight`, its reply and description, and `stride-mcp weight`. Tests as for the other tools, including over stdio. Also switch `DayWeight` (used by `summary` and `get_daily_summary`) from the latest weigh-in to the first, so a day's weight is the same everywhere. ✅ Done 20 November 2026. `DayWeight.byDay` splits a range by day, and `WeightHistory` works out the summary, so the tool and the command give the same numbers. The default range is `GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS` (30). `summary` now says "first of N weigh-ins".
 5. **Docs:** the quick start, the tool table, AGENTS.md status. ✅ Done 20 November 2026.
-6. **Live check** (owner): "how has my weight changed since September?" in Claude Code.
+6. **Live check** (owner): "how has my weight changed since September?" in Claude Code. ✅ Done 21 November 2026.
+
+## Live check (21 November 2026)
+
+The owner ran `stride-mcp weight 2026-09-01`, then asked Claude Code the question. Nearly 3 months, 45 days with a weigh-in.
+
+| Checked | Result |
+|---|---|
+| The CLI's summary against its table: first, last, change, lowest, highest, count | ✅ All match. A day 0.1 kg above the lowest didn't take its place. |
+| A day with two weights typed in | ✅ The first one, the BMI only, no `*` (no scale reading that day) |
+| Times on both sides of the clock change | ✅ Local time: BST in October, GMT in November |
+| Claude Code's answer against the CLI | ✅ The same first, last, change and highest. It also worked out the weigh-ins and the average for each month, and got them right. |
+| Every value against the Garmin Connect website (Weight page, one weigh-in) | ✅ The same time, weight, BMI, body fat, skeletal muscle mass, bone mass and body water. Bone mass looked high, but it's Garmin's own figure, so the grams-to-kg conversion is right for every mass. |
+
+Claude's reading of the trend (for example, that a low day was down to hydration) is its own, not something the tool says.
 
 ## Not in this plan
 
