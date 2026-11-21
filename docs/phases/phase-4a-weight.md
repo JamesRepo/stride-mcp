@@ -2,7 +2,7 @@
 
 **Done when:** I ask "how has my weight changed since September?" and get an answer built from my Garmin scale's weigh-ins.
 
-_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner chose which weigh-in counts (✅) and approved the rest as proposed. Step 2 done 20 November 2026: the owner's capture confirmed the field names and grams (see [What the capture showed](#what-the-capture-showed-20-november-2026)). Step 3 done 20 November 2026: `GarminClient.weighIns(from, to)`. Next: step 4, the tool and the CLI command._
+_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner chose which weigh-in counts (✅) and approved the rest as proposed. Step 2 done 20 November 2026: the owner's capture confirmed the field names and grams (see [What the capture showed](#what-the-capture-showed-20-november-2026)). Step 3 done 20 November 2026: `GarminClient.weighIns(from, to)`. Steps 4 and 5 done 20 November 2026: `get_weight`, `stride-mcp weight`, the first weigh-in everywhere, and the docs. Next: step 6, the owner's live check._
 
 ## What the capture showed (20 November 2026)
 
@@ -13,7 +13,7 @@ _Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-
 | The range reply is `dailyWeightSummaries`: one entry per day **with** a weigh-in, newest day first | Days with none are already left out |
 | Each day has `summaryDate` and `allWeightMetrics`, that day's weigh-ins, newest first, named as in the one-day reply | One parser for both. We sort them ourselves, so the first of the day is easy to pick. |
 | Each day also has `latestWeight`, `minWeight`, `maxWeight` and `numOfWeightEntries` | Not used: we pick the first weigh-in ourselves |
-| `sourceType` is `INDEX_SCALE` for the scale, `USER_SETTING` for a weight typed in on Garmin Connect, with no body composition | |
+| `sourceType` is `INDEX_SCALE` for the scale, `USER_SETTING` for a weight typed in on Garmin Connect, with only a BMI (Garmin works it out) and no other body composition | BMI alone doesn't count as body composition (see [Decisions](#decisions-to-make)) |
 | 14 November had two weights typed in 4 seconds apart | The first one counts, as decided |
 | The reply also has `previousDateWeight` (the last weigh-in before the range), `nextDateWeight` and `totalAverage` | Not used |
 | 30 days in one request worked | |
@@ -46,14 +46,36 @@ The reply has one entry per day with a weigh-in, oldest first:
 
 | Field | Unit |
 |---|---|
-| `date`, `time` | The day, and the time of the weigh-in we picked (see [Decisions](#decisions-to-make)) |
+| `date`, `time` | The day, and the local time of the weigh-in that gave the weight, like `07:37` (see [Decisions](#decisions-to-make)) |
 | `weightKg` | kg, 1 decimal place |
 | `bodyFatPercent`, `bodyWaterPercent` | % (18.5 means 18.5%) |
 | `muscleMassKg`, `boneMassKg` | kg |
 | `bmi`, `visceralFat`, `metabolicAge` | As Garmin gives them |
 | `weighIns` | How many weigh-ins that day |
+| `bodyCompositionFromAnotherWeighIn` | `true` if the body composition isn't from the weigh-in that gave the weight. Left out otherwise. |
 
 Fields the scale didn't send are left out, as everywhere. On top of that, a short summary for the range: the first and last weight, the change in kg, the lowest and highest, and how many days had a weigh-in. AI apps are bad at adding up long lists, so we do it for them.
+
+What it looks like (built 20 November 2026, from the real capture, shortened):
+
+```json
+{"today":"2026-11-20","timeZone":"Europe/London","from":"2026-10-22","to":"2026-11-20",
+ "summary":{"daysWithWeighIns":4,"first":{"date":"2026-10-23","weightKg":75.7},
+   "last":{"date":"2026-11-20","weightKg":76.1},"changeKg":0.4,
+   "lowest":{"date":"2026-10-23","weightKg":75.7},"highest":{"date":"2026-11-20","weightKg":76.1}},
+ "days":[
+  {"date":"2026-10-23","time":"07:37","weightKg":75.7,"bodyFatPercent":18.0,"bodyWaterPercent":55.3,
+   "muscleMassKg":33.0,"boneMassKg":3.2,"bmi":23.4,"weighIns":1},
+  {"date":"2026-11-14","time":"08:31","weightKg":75.8,"bmi":23.4,"weighIns":2},
+  …]}
+```
+
+| Rule | Why |
+|---|---|
+| The first, last, change, lowest and highest use only days with a weight. `daysWithWeighIns` counts every day listed, including one with only body composition. | A first, last or change needs a weight |
+| `changeKg` is worked out from the weights as shown, to 1 decimal place | So it always matches them: 76.04 and 75.66 show as 76.0 and 75.7, so the change is −0.3, not −0.4 |
+| Lowest and highest compare the weights as shown, to 1 decimal place. A tie gives the earlier day. | So the day given matches the numbers: 75.04 and 74.96 both show as 75.0, so they tie |
+| `from` and `to` follow `get_activities`: only `to` is the 30 days ending there, only `from` is from there to today | The same rules in every tool |
 
 A CLI command, `stride-mcp weight [from] [to]`, prints the same thing, so the owner can check the numbers without an AI app. The other data tools all have one too.
 
@@ -77,14 +99,15 @@ Cache: if the range includes today or yesterday, 15 minutes (the scale may still
 | Most days per call | **367** (was 366, changed 20 November 2026) | It's one request to Garmin. A year is a common question, and a year to the same date is 367 days with both ends counted when it includes 29 February. |
 | Default range | **Last 30 days** | Enough for a trend |
 | Days with no weigh-in | **Left out** | Matches the sheet: "a blank means no reading, not no change" |
+| Which body composition counts, if the first weigh-in has none? | ✅ **The first weigh-in that has any** (owner's choice, 20 November 2026), even if the weight came from an earlier one. `bodyCompositionFromAnotherWeighIn` says when they differ. | A weight typed in on Garmin Connect has only a BMI, which Garmin works out (seen in the capture, 20 November 2026). Typing one in before stepping on the scale shouldn't lose the scale's readings. So BMI alone doesn't count when choosing the body composition: only body fat, body water, muscle, bone, visceral fat or metabolic age do (`WeighIn.hasScaleBodyComposition`). The BMI comes from the body composition's weigh-in if it has one, otherwise from the weight's, so a day with only a typed-in weight still shows it. |
 
 ## Steps
 
 1. **Plan:** this doc.
 2. **Capture** (owner): `capture` also saves the range call for the last 30 days, as `weight-range.json`. ✅ Done 20 November 2026. The field names and grams were right, so `summary` and `get_daily_summary` needed no fix.
 3. **Client:** `GarminClient.weighIns(from, to)`, with the path in `GarminDataConfig`, the cache, and fixtures. Tests: the reply from the capture, no weigh-ins, a day with two, a range over the limit refused with nothing sent, and 429 and 403 once with no retry. ✅ Done 20 November 2026. Every weigh-in in the range, oldest first, each with its day; the limit is `GarminDataConfig.MAX_WEIGHT_RANGE_DAYS`; cached as `weight-<from>-to-<to>.json`. After review (20 November 2026): days outside the range are left out, a weigh-in with no time sorts last in its day so it can't become the day's weight, a day is sorted by one time field only (see below), and the limit is 367.
-4. **Tool and CLI:** `get_weight`, its reply and description, and `stride-mcp weight`. Tests as for the other tools, including over stdio. Also switch `DayWeight` (used by `summary` and `get_daily_summary`) from the latest weigh-in to the first, so a day's weight is the same everywhere.
-5. **Docs:** the quick start, the tool table, AGENTS.md status.
+4. **Tool and CLI:** `get_weight`, its reply and description, and `stride-mcp weight`. Tests as for the other tools, including over stdio. Also switch `DayWeight` (used by `summary` and `get_daily_summary`) from the latest weigh-in to the first, so a day's weight is the same everywhere. ✅ Done 20 November 2026. `DayWeight.byDay` splits a range by day, and `WeightHistory` works out the summary, so the tool and the command give the same numbers. The default range is `GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS` (30). `summary` now says "first of N weigh-ins".
+5. **Docs:** the quick start, the tool table, AGENTS.md status. ✅ Done 20 November 2026.
 6. **Live check** (owner): "how has my weight changed since September?" in Claude Code.
 
 ## Not in this plan

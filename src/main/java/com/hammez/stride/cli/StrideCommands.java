@@ -8,6 +8,7 @@ import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
+import java.time.temporal.ChronoUnit;
 import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
@@ -30,6 +31,7 @@ import com.hammez.stride.garmin.GarminSamples.Saved;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.UnexpectedReplyException;
 import com.hammez.stride.garmin.WeighIn;
+import com.hammez.stride.garmin.WeightHistory;
 import com.hammez.stride.garmin.auth.GarminAuth;
 import com.hammez.stride.garmin.auth.GarminAuth.WhoAmI;
 import com.hammez.stride.garmin.auth.GarminException;
@@ -37,7 +39,7 @@ import com.hammez.stride.garmin.auth.NotFoundException;
 
 /**
  * The commands: {@code login}, {@code whoami}, {@code logout}, the data commands ({@code activities},
- * {@code activity}, {@code summary}, {@code sleep}) and {@code capture}. Runs one command and sets the exit code:
+ * {@code activity}, {@code summary}, {@code sleep}, {@code weight}) and {@code capture}. Runs one command and sets the exit code:
  * 0 for success, 1 for a failure, 2 for a usage error.
  * <p>
  * The data commands go through {@link GarminClient}, so the cache answers when it can. After one, a reason the
@@ -59,19 +61,23 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               summary [date]    One day's totals: steps, calories, heart rate, stress, Body Battery, the sleep
                                 that ended that morning, and weight and body composition. Default today.
               sleep [date]      The night that ended on that morning. Default last night.
+              weight [from] [to]
+                                Weight and body composition for each day with a weigh-in, and the change.
+                                Default the last %d days. With only from, up to today. At most %d days.
               capture <folder>  Save Garmin's raw replies (about 17 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
               serve             Start the MCP server, over stdin and stdout. An AI app runs this, not you.
 
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
-            --no-cache            With activities, activity, summary or sleep: ask Garmin even if the cache
-                                  has a fresh copy. The new reply is still cached.
-            """.formatted(GarminDataConfig.DEFAULT_RANGE_DAYS, GarminDataConfig.MAX_RANGE_DAYS);
+            --no-cache            With activities, activity, summary, sleep or weight: ask Garmin even if the
+                                  cache has a fresh copy. The new reply is still cached.
+            """.formatted(GarminDataConfig.DEFAULT_RANGE_DAYS, GarminDataConfig.MAX_RANGE_DAYS,
+                    GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
 
     public static final String SERVE_ARGUMENTS =
             "serve takes no arguments or options, only Spring settings such as --stride.token-file=…";
 
-    private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep");
+    private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep", "weight");
 
     static final String CHECKLIST = "the checklist in docs/phases/phase-2-data.md (\"Getting real samples\")";
 
@@ -145,6 +151,10 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         try {
             command.run();
             return 0;
+        } catch (UsageException e) {
+            // A range that could only be checked once today was known (weight). Nothing else was asked for.
+            io.err().println(e.getMessage());
+            return 2;
         } catch (GarminException e) {
             io.err().println(e.getMessage() + e.garminReply().map(reply -> " Response: " + reply).orElse(""));
             return 1;
@@ -169,7 +179,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             throw new UsageException(null, true);
         }
         if (line.noCache() && !DATA_COMMANDS.contains(name)) {
-            throw new UsageException("--no-cache only works with activities, activity, summary and sleep.", true);
+            throw new UsageException("--no-cache only works with activities, activity, summary, sleep and weight.", true);
         }
         if ((line.days() != null || line.type() != null) && !name.equals("activities")) {
             throw new UsageException("--days and --type only work with activities.", true);
@@ -207,6 +217,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
                 arguments(line, 0, 1);
                 LocalDate date = date(line);
                 yield () -> sleep(data, date);
+            }
+            case "weight" -> {
+                arguments(line, 0, 2);
+                LocalDate from = date(line, 0);
+                LocalDate to = date(line, 1);
+                if (from != null && to != null) {
+                    weightRange(from, to);
+                }
+                yield () -> weight(data, from, to);
             }
             case "capture" -> {
                 arguments(line, 1, 1);
@@ -247,13 +266,30 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
 
     /** The date argument, or null for the default (today). */
     private static LocalDate date(CommandLine line) {
-        if (line.arguments().isEmpty()) {
+        return date(line, 0);
+    }
+
+    /** The date argument at {@code index}, or null if there are fewer arguments. */
+    private static LocalDate date(CommandLine line, int index) {
+        if (line.arguments().size() <= index) {
             return null;
         }
         try {
-            return LocalDate.parse(line.arguments().getFirst());
+            return LocalDate.parse(line.arguments().get(index));
         } catch (DateTimeParseException e) {
             throw new UsageException("Dates look like 2026-10-22.", false);
+        }
+    }
+
+    /** Refuses a range {@code weight} can't ask for: backwards, or longer than the limit. */
+    private static void weightRange(LocalDate from, LocalDate to) {
+        if (from.isAfter(to)) {
+            throw new UsageException(from + " is after " + to + ". Put the earlier date first.", false);
+        }
+        long days = ChronoUnit.DAYS.between(from, to) + 1;
+        if (days > GarminDataConfig.MAX_WEIGHT_RANGE_DAYS) {
+            throw new UsageException("weight covers at most " + GarminDataConfig.MAX_WEIGHT_RANGE_DAYS + " days. "
+                    + from + " to " + to + " is " + days + " days, both included.", false);
         }
     }
 
@@ -296,6 +332,28 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             io.err().println("Left out " + name + ": " + e.getMessage());
             return Optional.empty();
         }
+    }
+
+    /**
+     * The weigh-ins from {@code from} to {@code to}. No dates means the last
+     * {@link GarminDataConfig#DEFAULT_WEIGHT_RANGE_DAYS} days, today included; only
+     * {@code from} means from there to today. A range that needs today to check is checked here, before the
+     * weigh-ins are asked for.
+     */
+    private void weight(GarminClient data, LocalDate from, LocalDate to) {
+        LocalDate today = data.today();
+        if (to == null) {
+            if (from != null && from.isAfter(today)) {
+                throw new UsageException(from + " is after today (" + today + ").", false);
+            }
+            to = today;
+        }
+        if (from == null) {
+            from = to.minusDays(GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS - 1);
+        }
+        weightRange(from, to);
+        WeightHistory history = WeightHistory.of(data.weighIns(from, to));
+        new DataPrinter(io.out()).weight(history, from, to, data.zone());
     }
 
     /** No date means last night: the night that ended this morning. */

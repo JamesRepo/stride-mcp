@@ -14,6 +14,9 @@ import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
 import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
 import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_SINCE_OCTOBER;
 import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -22,6 +25,7 @@ import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
@@ -107,13 +111,15 @@ class GarminToolsTest {
     // What the AI sees in tools/list
 
     @Test
-    void fourReadOnlyToolsWithThePlansDescriptions() {
+    void fiveReadOnlyToolsWithThePlansDescriptions() {
         assertThat(tools()).extracting(spec -> spec.tool().name())
-                .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep");
+                .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep",
+                        "get_weight");
         assertThat(tool("get_activities").description()).isEqualTo(GarminTools.GET_ACTIVITIES);
         assertThat(tool("get_activity").description()).isEqualTo(GarminTools.GET_ACTIVITY);
         assertThat(tool("get_daily_summary").description()).isEqualTo(GarminTools.GET_DAILY_SUMMARY);
         assertThat(tool("get_sleep").description()).isEqualTo(GarminTools.GET_SLEEP);
+        assertThat(tool("get_weight").description()).isEqualTo(GarminTools.GET_WEIGHT);
 
         for (SyncToolSpecification spec : tools()) {
             Tool tool = spec.tool();
@@ -142,6 +148,12 @@ class GarminToolsTest {
         assertThat(GarminTools.REFRESH).contains(
                 lifetimes.recentActivities().toMinutes() + " to " + lifetimes.recentDay().toMinutes() + " minutes",
                 "an activity's details for " + lifetimes.activity().toDays() + " days");
+        assertThat(GarminTools.GET_WEIGHT).endsWith("`from` and `to` are dates like 2026-09-01, both included, in "
+                + "the owner's time zone, covering at most 367 days, so a year to the same date fits. Leave both out "
+                + "for the last 30 days, today included. A range ending before yesterday is cached for a day, or an "
+                + "hour if it had no weigh-ins. The reply also gives today's date in the owner's time zone.");
+        assertThat(lifetimes.emptyOlderDay()).isEqualTo(Duration.ofHours(1));
+        assertThat(lifetimes.olderWeightRange()).isEqualTo(Duration.ofDays(1));
     }
 
     @Test
@@ -150,6 +162,12 @@ class GarminToolsTest {
                 InstanceOfAssertFactories.MAP).containsOnlyKeys("from", "to", "type", "refresh");
         assertThat(property(tool("get_activities"), "from")).containsEntry("type", "string");
         assertThat(tool("get_activities").inputSchema().get("required")).isEqualTo(List.of());
+
+        assertThat(tool("get_weight").inputSchema().get("properties")).asInstanceOf(
+                InstanceOfAssertFactories.MAP).containsOnlyKeys("from", "to", "refresh");
+        assertThat(property(tool("get_weight"), "from")).containsEntry("type", "string");
+        assertThat(property(tool("get_weight"), "to")).containsEntry("type", "string");
+        assertThat(tool("get_weight").inputSchema().get("required")).isEqualTo(List.of());
 
         assertThat(property(tool("get_activity"), "id")).containsEntry("type", "integer");
         assertThat(tool("get_activity").inputSchema().get("required")).isEqualTo(List.of("id"));
@@ -311,19 +329,39 @@ class GarminToolsTest {
     }
 
     @Test
-    void aWeightTypedInAfterASmartScaleSaysTheBodyCompositionIsFromAnotherWeighIn() {
+    void aWeightTypedInAfterTheScaleDoesntCount() {
+        // The day's weight is its first weigh-in (the owner's choice, 20 November 2026).
         signedIn();
         garmin.respond(SUMMARY, 200, "{}").respond(WEIGHT_PATH + "2026-10-23", 200, """
                 {"dateWeightList":[
-                 {"weight":75900.0,"timestampGMT":1792785600000,"sourceType":"MANUAL"},
-                 {"weight":75400.0,"bodyFat":18.6,"timestampGMT":1792737900000}]}""");
+                 {"weight":75900.0,"bmi":23.4,"timestampGMT":1792785600000,"sourceType":"USER_SETTING"},
+                 {"weight":75400.0,"bmi":23.3,"bodyFat":18.6,"timestampGMT":1792737900000,
+                  "sourceType":"INDEX_SCALE"}]}""");
 
         String reply = ok("get_daily_summary", Map.of("date", "2026-10-23"));
 
         // Recorded, though the day's totals are empty: there was a weigh-in.
         assertThat(reply).isEqualTo(compact("""
                 {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-23","recorded":true,
-                 "weight":{"kilograms":75.9,"weighIns":2,"bodyCompositionFromAnotherWeighIn":true,
+                 "weight":{"kilograms":75.4,"weighIns":2,"bmi":23.3,"bodyFatPercent":18.6}}"""));
+    }
+
+    @Test
+    void aWeightTypedInBeforeTheScaleKeepsTheScalesBodyComposition() {
+        // The weight is the first weigh-in, the body composition the first scale reading. The typed-in weight's
+        // BMI (Garmin works one out, as in the real capture) doesn't make it the body composition.
+        signedIn();
+        garmin.respond(SUMMARY, 200, "{}").respond(WEIGHT_PATH + "2026-10-23", 200, """
+                {"dateWeightList":[
+                 {"weight":75400.0,"bmi":23.3,"bodyFat":18.6,"timestampGMT":1792737900000,
+                  "sourceType":"INDEX_SCALE"},
+                 {"weight":75900.0,"bmi":23.4,"timestampGMT":1792737600000,"sourceType":"USER_SETTING"}]}""");
+
+        String reply = ok("get_daily_summary", Map.of("date", "2026-10-23"));
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-23","recorded":true,
+                 "weight":{"kilograms":75.9,"weighIns":2,"bodyCompositionFromAnotherWeighIn":true,"bmi":23.3,
                    "bodyFatPercent":18.6}}"""));
     }
 
@@ -367,6 +405,215 @@ class GarminToolsTest {
                 {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-24","recorded":false}"""));
     }
 
+    // get_weight
+
+    @Test
+    void weightFromTheRealReply() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE, Map.of("includeAll", "true"), 200, Fixtures.read("weight-range.json"));
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-22", "to", "2026-11-20"));
+
+        assertThat(reply).isEqualTo(compact(WEIGHT_SINCE_OCTOBER));
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+    }
+
+    @Test
+    void weightDefaultsToTheLastThirtyDaysAndNoWeighInsIsNotAnError() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{\"dailyWeightSummaries\":[]}");
+
+        String reply = ok("get_weight", Map.of());
+
+        // 30 days, today (in the profile's time zone) included.
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-10-24","timeZone":"Europe/London","from":"2026-09-25","to":"2026-10-24",
+                 "summary":{"daysWithWeighIns":0},"days":[]}"""));
+    }
+
+    @Test
+    void weightWithOnlyToOrOnlyFromFollowsGetActivities() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-09-01/2026-09-30", 200, "{}")
+                .respond(WEIGHT_RANGE_PATH + "2026-09-01/2026-10-24", 200, "{}");
+
+        // Only to: the 30 days ending there. Only from: from there to today.
+        assertThat(json.readTree(ok("get_weight", Map.of("to", "2026-09-30"))).path("from").asString())
+                .isEqualTo("2026-09-01");
+        assertThat(json.readTree(ok("get_weight", Map.of("from", "2026-09-01"))).path("to").asString())
+                .isEqualTo("2026-10-24");
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-09-01/2026-09-30")).hasSize(1);
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-09-01/2026-10-24")).hasSize(1);
+    }
+
+    @Test
+    void weightForAYearToTheSameDateAcrossTwentyNinthFebruary() {
+        // 2027-03-01 to 2028-03-01 is 367 days with both ends counted: the most allowed.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2027-03-01/2028-03-01", 200, "{}");
+
+        ok("get_weight", Map.of("from", "2027-03-01", "to", "2028-03-01"));
+
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2027-03-01/2028-03-01")).hasSize(1);
+    }
+
+    @Test
+    void aDayWithTwoWeighInsTakesTheFirstForTheWeightAndTheBodyComposition() {
+        // Made up, with the real reply's field names. Garmin lists a day's weigh-ins newest first.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-23","allWeightMetrics":[
+                  {"weight":75000.0,"bodyFat":17.9,"muscleMass":33200.0,"visceralFat":6,"metabolicAge":34,
+                   "timestampGMT":1792760400000,"sourceType":"INDEX_SCALE"},
+                  {"weight":75400.0,"bodyFat":18.6,"muscleMass":33100.0,"visceralFat":7,"metabolicAge":35,
+                   "timestampGMT":1792737900000,"sourceType":"INDEX_SCALE"}]},
+                 {"summaryDate":"2026-10-20","allWeightMetrics":[
+                  {"weight":76000.0,"bmi":23.4,"bodyFat":18.9,"timestampGMT":1792479900000,
+                   "sourceType":"INDEX_SCALE"},
+                  {"weight":76200.0,"bmi":23.5,"timestampGMT":1792479600000,"sourceType":"USER_SETTING"}]},
+                 {"summaryDate":"2026-10-02","allWeightMetrics":[
+                  {"weight":75400.0,"bmi":23.3,"timestampGMT":1790913600000,"sourceType":"USER_SETTING"}]}]}""");
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-01"));
+
+        // 23 October: the 07:45 scale reading, for both, not the 14:00 one. 20 October: a weight typed in at 08:00,
+        // then the scale's body composition at 08:05. The lowest is a tie, so the earlier day is given.
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-10-24","timeZone":"Europe/London","from":"2026-10-01","to":"2026-10-24",
+                 "summary":{"daysWithWeighIns":3,"first":{"date":"2026-10-02","weightKg":75.4},
+                   "last":{"date":"2026-10-23","weightKg":75.4},"changeKg":0.0,
+                   "lowest":{"date":"2026-10-02","weightKg":75.4},"highest":{"date":"2026-10-20","weightKg":76.2}},
+                 "days":[
+                  {"date":"2026-10-02","time":"05:00","weightKg":75.4,"bmi":23.3,"weighIns":1},
+                  {"date":"2026-10-20","time":"08:00","weightKg":76.2,"bodyFatPercent":18.9,"bmi":23.4,"weighIns":2,
+                   "bodyCompositionFromAnotherWeighIn":true},
+                  {"date":"2026-10-23","time":"07:45","weightKg":75.4,"bodyFatPercent":18.6,"muscleMassKg":33.1,
+                   "visceralFat":7,"metabolicAge":35,"weighIns":2}]}"""));
+    }
+
+    @Test
+    void aWeightTypedInBeforeTheScaleTakesNoneOfTheScalesBodyComposition() {
+        // As in the real capture, the typed-in weight has a BMI Garmin worked out. 07:30, then the scale at 07:35.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-20/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-20","allWeightMetrics":[
+                  {"weight":75900.0,"bmi":23.3,"bodyFat":18.2,"bodyWater":55.4,"muscleMass":33100.0,
+                   "boneMass":3200.0,"timestampGMT":1792478100000,"sourceType":"INDEX_SCALE"},
+                  {"weight":76200.0,"bmi":23.5,"bodyFat":null,"bodyWater":null,"muscleMass":null,"boneMass":null,
+                   "timestampGMT":1792477800000,"sourceType":"USER_SETTING"}]}]}""");
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-20"));
+
+        // The weight and its time from the typed-in weight; everything else, BMI included, from the scale.
+        assertThat(json.readTree(reply).path("days")).isEqualTo(json.readTree("""
+                [{"date":"2026-10-20","time":"07:30","weightKg":76.2,"bodyFatPercent":18.2,"bodyWaterPercent":55.4,
+                  "muscleMassKg":33.1,"boneMassKg":3.2,"bmi":23.3,"weighIns":2,
+                  "bodyCompositionFromAnotherWeighIn":true}]"""));
+    }
+
+    @Test
+    void aTieIsBetweenTheWeightsAsShownAndGivesTheEarlierDay() {
+        // 75.04 and 74.96 both show as 75.0: the lowest is the earlier day, not the lighter one. The same for the
+        // highest, with 76.04 and 75.96.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-31", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-30","allWeightMetrics":[{"weight":74960.0,"timestampGMT":1793347200000}]},
+                 {"summaryDate":"2026-10-23","allWeightMetrics":[{"weight":75040.0,"timestampGMT":1792737900000}]},
+                 {"summaryDate":"2026-10-12","allWeightMetrics":[{"weight":76040.0,"timestampGMT":1791788400000}]},
+                 {"summaryDate":"2026-10-05","allWeightMetrics":[{"weight":75960.0,"timestampGMT":1791183600000}]}]}""");
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-01", "to", "2026-10-31"));
+
+        assertThat(json.readTree(reply).path("summary")).isEqualTo(json.readTree("""
+                {"daysWithWeighIns":4,"first":{"date":"2026-10-05","weightKg":76.0},
+                 "last":{"date":"2026-10-30","weightKg":75.0},"changeKg":-1.0,
+                 "lowest":{"date":"2026-10-23","weightKg":75.0},"highest":{"date":"2026-10-05","weightKg":76.0}}"""));
+    }
+
+    @Test
+    void theChangeIsWorkedOutFromTheWeightsAsShown() {
+        // 76.04 shows as 76.0 and 75.66 as 75.7: the change shown is -0.3, not the -0.38 between the two.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-23","allWeightMetrics":[{"weight":75660.0,"timestampGMT":1792737900000}]},
+                 {"summaryDate":"2026-10-02","allWeightMetrics":[{"weight":76040.0,"timestampGMT":1790913600000}]}]}""");
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-01"));
+
+        assertThat(json.readTree(reply).path("summary")).isEqualTo(json.readTree("""
+                {"daysWithWeighIns":2,"first":{"date":"2026-10-02","weightKg":76.0},
+                 "last":{"date":"2026-10-23","weightKg":75.7},"changeKg":-0.3,
+                 "lowest":{"date":"2026-10-23","weightKg":75.7},"highest":{"date":"2026-10-02","weightKg":76.0}}"""));
+        assertThat(reply).contains("\"weightKg\":76.0", "\"weightKg\":75.7");
+    }
+
+    @Test
+    void aDayWithOnlyBodyCompositionIsListedButNotInTheSummary() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-23","allWeightMetrics":[{"bodyFat":18.6}]}]}""");
+
+        String reply = ok("get_weight", Map.of("from", "2026-10-01"));
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-10-24","timeZone":"Europe/London","from":"2026-10-01","to":"2026-10-24",
+                 "summary":{"daysWithWeighIns":1},
+                 "days":[{"date":"2026-10-23","bodyFatPercent":18.6,"weighIns":1}]}"""));
+    }
+
+    @Test
+    void weightsBadRangesAreRefusedWithNothingSent() {
+        assertThat(error("get_weight", Map.of("from", "2026-10-23", "to", "2026-10-22")))
+                .isEqualTo("`from` (2026-10-23) is after `to` (2026-10-22). Put the earlier date first.");
+        assertThat(error("get_weight", Map.of("from", "2027-03-01", "to", "2028-03-02")))
+                .isEqualTo("The range can be at most 367 days. 2027-03-01 to 2028-03-02 is 368 days, both "
+                        + "included.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void weightsFromAfterTodayOrTooLongAgoWithNoToNeedsOnlyTheProfile() {
+        signedIn();
+
+        assertThat(error("get_weight", Map.of("from", "2026-10-25")))
+                .isEqualTo("`from` (2026-10-25) is after today (2026-10-24).");
+        assertThat(error("get_weight", Map.of("from", "2025-10-22")))
+                .isEqualTo("The range can be at most 367 days. 2025-10-22 to 2026-10-24 is 368 days, both "
+                        + "included.");
+
+        assertThat(garmin.requests()).noneMatch(request -> request.path().startsWith(WEIGHT_RANGE_PATH));
+    }
+
+    @Test
+    void weightRateLimitedOnceWithNoRetry() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE, 429, "");
+
+        assertThat(error("get_weight", Map.of("from", "2026-10-22", "to", "2026-11-20")))
+                .isEqualTo("Garmin is rate limiting. Wait a while (an hour or more) before trying again.");
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+        assertThat(log()).isEqualTo("WARN get_weight failed in N ms: Garmin is rate limiting. Wait a while "
+                + "(an hour or more) before trying again.");
+    }
+
+    @Test
+    void weightForbiddenOnceWithNoRetryAndGarminsReplyLeftOut() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE, 403, "<html>blocked</html>");
+
+        String told = error("get_weight", Map.of("from", "2026-10-22", "to", "2026-11-20"));
+
+        assertThat(told).isEqualTo("Garmin refused the request during the request to " + WEIGHT_RANGE
+                + " (HTTP 403). It may be blocking this connection. Wait a while before trying again.");
+        assertThat(garmin.requests(WEIGHT_RANGE)).hasSize(1);
+        assertThat(log()).doesNotContain("blocked");
+    }
+
     // refresh
 
     @Test
@@ -377,12 +624,15 @@ class GarminToolsTest {
                 .respond(ACTIVITY, 200, Fixtures.read("activity.json")).respond(SPLITS, 200, "{}")
                 .respond(SUMMARY, 200, "{\"totalSteps\":100}").respond(SUMMARY, 200, "{\"totalSteps\":200}")
                 .respond(WEIGHT_PATH + "2026-10-24", 200, "{}").respond(WEIGHT_PATH + "2026-10-24", 200, "{}")
-                .respond(SLEEP, 204, "").respond(SLEEP, 204, "");
+                .respond(SLEEP, 204, "").respond(SLEEP, 204, "")
+                .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}")
+                .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}");
         var calls = List.of(
                 new HashMap<String, Object>(Map.of("tool", "get_activities")),
                 new HashMap<String, Object>(Map.of("tool", "get_activity", "id", 24816092240L)),
                 new HashMap<String, Object>(Map.of("tool", "get_daily_summary")),
-                new HashMap<String, Object>(Map.of("tool", "get_sleep")));
+                new HashMap<String, Object>(Map.of("tool", "get_sleep")),
+                new HashMap<String, Object>(Map.of("tool", "get_weight")));
 
         var summaries = new ArrayList<String>();
         for (Map<String, Object> call : calls) {
@@ -401,7 +651,8 @@ class GarminToolsTest {
 
         // Asked, then asked again with refresh, then answered from the refreshed copy.
         assertThat(summaries).containsExactly("100", "200", "200");
-        for (String path : List.of(ACTIVITIES, ACTIVITY, SPLITS, SUMMARY, WEIGHT_PATH + "2026-10-24", SLEEP)) {
+        for (String path : List.of(ACTIVITIES, ACTIVITY, SPLITS, SUMMARY, WEIGHT_PATH + "2026-10-24", SLEEP,
+                WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24")) {
             assertThat(garmin.requests(path)).as(path).hasSize(2);
         }
         assertThat(garmin.requests(PROFILE_PATH)).hasSize(1);
@@ -420,6 +671,10 @@ class GarminToolsTest {
                     .isEqualTo("`date` isn't a date. Dates look like 2026-10-22.");
             assertThat(error("get_sleep", Map.of("date", date)))
                     .isEqualTo("`date` isn't a date. Dates look like 2026-10-22.");
+            assertThat(error("get_weight", Map.of("from", date)))
+                    .isEqualTo("`from` isn't a date. Dates look like 2026-10-22.");
+            assertThat(error("get_weight", Map.of("from", "2026-10-01", "to", date)))
+                    .isEqualTo("`to` isn't a date. Dates look like 2026-10-22.");
         }
         assertThat(garmin.requests()).isEmpty();
     }
@@ -468,6 +723,8 @@ class GarminToolsTest {
                 .isEqualTo("Unknown input `days`. get_activities takes from, to, type, refresh.");
         assertThat(error("get_sleep", Map.of("night", "2026-10-23")))
                 .isEqualTo("Unknown input `night`. get_sleep takes date, refresh.");
+        assertThat(error("get_weight", Map.of("days", 30)))
+                .isEqualTo("Unknown input `days`. get_weight takes from, to, refresh.");
         assertThat(garmin.requests()).isEmpty();
     }
 

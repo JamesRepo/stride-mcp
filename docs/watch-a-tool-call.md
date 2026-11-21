@@ -77,7 +77,7 @@ What comes back (shortened):
 | id | Reply | Who wrote it |
 |---|---|---|
 | 1 | `"serverInfo":{"name":"stride-mcp",…}`, `"capabilities":{"tools":…}`, `"instructions":"Garmin data for the owner…"` | The SDK, from `application-serve.properties` |
-| 2 | The four tools, each with its `description` and `inputSchema` | Spring AI, from the `@McpTool` and `@McpToolParam` annotations |
+| 2 | The five tools, each with its `description` and `inputSchema` | Spring AI, from the `@McpTool` and `@McpToolParam` annotations |
 | 3 | `"isError":true`, "`date` isn't a date. Dates look like 2026-10-22." | `GarminTools`, before anything reaches Garmin |
 | 4 | `"isError":true`, "Not logged in. Run `stride-mcp login`." | `TokenManager`, worded for the AI by `GarminTools` |
 | 5 | `"isError":true`, "Tool (get_activity) input validation failed: … required property 'id' not found" | The SDK, from the schema. Our code never runs. |

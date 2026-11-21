@@ -50,6 +50,7 @@ class DataCommandsTest {
     private static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
     private static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
+    private static final String WEIGHT_RANGE_PATH = "/weight-service/weight/range/";
 
     @TempDir
     Path temp;
@@ -236,7 +237,7 @@ class DataCommandsTest {
     // summary
 
     @Test
-    void summaryWithTheNightsSleepAndTheLatestWeighIn() {
+    void summaryWithTheNightsSleepAndTheFirstWeighIn() {
         signedIn();
         garmin.respond(SUMMARY, Map.of("calendarDate", "2026-10-23"), 200, Fixtures.read("summary-today.json"))
                 .respond(SLEEP, Map.of("date", "2026-10-23", "nonSleepBufferMinutes", "60"), 200,
@@ -245,7 +246,8 @@ class DataCommandsTest {
 
         assertThat(run("summary", "2026-10-23")).isZero();
 
-        // Garmin gives muscle mass as a mass: its share of the weight is worked out.
+        // The weight was typed in, then the scale gave body composition 5 minutes later. Garmin gives muscle mass as
+        // a mass: its share of the weight is worked out, from the scale's own weight.
         assertThat(out()).isEqualTo("""
                 Fri 23 Oct 2026
                 Steps            3,532 (goal 11,190)
@@ -257,7 +259,7 @@ class DataCommandsTest {
                 Intensity        0 min moderate, 2 min vigorous
                 Floors climbed   7
                 Sleep            8:52:00, score 91 (Excellent)
-                Weight           75.4 kg (latest of 2 weigh-ins)
+                Weight           75.9 kg (first of 2 weigh-ins; body composition from another weigh-in)
                   BMI            23.3
                   Body fat       18.6%
                   Body water     55.1%
@@ -330,22 +332,23 @@ class DataCommandsTest {
     }
 
     @Test
-    void summaryTakesTheWeightAndBodyCompositionFromTheirLatestWeighIns() {
+    void summaryTakesTheFirstWeighInNotAWeightTypedInLater() {
         signedIn();
-        // A smart scale in the morning, then a weight typed in at night.
+        // A smart scale in the morning, then a weight typed in at night. The first one counts (20 November 2026).
         garmin.respond(SUMMARY, 200, "{}")
                 .respond(SLEEP, 204, "")
                 .respond(WEIGHT_PATH + "2026-10-23", 200, """
                         {"dateWeightList":[
-                         {"weight":75900.0,"timestampGMT":1792785600000,"sourceType":"MANUAL"},
-                         {"weight":75400.0,"bodyFat":18.6,"muscleMass":33100.0,"timestampGMT":1792737900000}]}""");
+                         {"weight":75900.0,"bmi":23.4,"timestampGMT":1792785600000,"sourceType":"USER_SETTING"},
+                         {"weight":75400.0,"bmi":23.3,"bodyFat":18.6,"muscleMass":33100.0,
+                          "timestampGMT":1792737900000}]}""");
 
         assertThat(run("summary", "2026-10-23")).isZero();
 
-        // Muscle's share is of the weight measured with it.
         assertThat(out()).isEqualTo("""
                 Fri 23 Oct 2026
-                Weight           75.9 kg (latest of 2 weigh-ins; body composition from another weigh-in)
+                Weight           75.4 kg (first of 2 weigh-ins)
+                  BMI            23.3
                   Body fat       18.6%
                   Muscle mass    33.1 kg (44% of weight)
                 """);
@@ -380,6 +383,132 @@ class DataCommandsTest {
         assertThat(run("summary")).isZero();
 
         assertThat(out()).isEqualTo("No data recorded for Sat 24 Oct 2026.\n");
+    }
+
+    // weight
+
+    @Test
+    void weightFromTheRealReply() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-22/2026-11-20", Map.of("includeAll", "true"), 200,
+                Fixtures.read("weight-range.json"));
+
+        assertThat(run("weight", "2026-10-22", "2026-11-20")).isZero();
+
+        // The same numbers as get_weight. Columns nobody's scale filled in are left out.
+        assertThat(out()).isEqualTo("""
+                Date        Time    Weight  Body fat  Body water   Muscle    Bone  BMI   Weigh-ins
+                Fri 23 Oct  07:37  75.7 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.4  1
+                Sat 14 Nov  08:31  75.8 kg  –         –                 –       –  23.4  2
+                Tue 17 Nov  07:15  76.0 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.5  1
+                Fri 20 Nov  08:35  76.1 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.5  1
+                4 days with a weigh-in from Thu 22 Oct to Fri 20 Nov.
+                First 75.7 kg (Fri 23 Oct), last 76.1 kg (Fri 20 Nov): +0.4 kg.
+                Lowest 75.7 kg (Fri 23 Oct), highest 76.1 kg (Fri 20 Nov).
+                """);
+        assertThat(err()).isEmpty();
+    }
+
+    @Test
+    void weightDefaultsToTheLastThirtyDaysAndNoWeighInsIsNotAnError() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{\"dailyWeightSummaries\":[]}");
+
+        assertThat(run("weight")).isZero();
+
+        assertThat(out()).isEqualTo("No weigh-ins from Fri 25 Sep to Sat 24 Oct.\n");
+    }
+
+    @Test
+    void weightWithOnlyFromGoesToToday() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-24", 200, "{}");
+
+        assertThat(run("weight", "2026-10-01")).isZero();
+
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-10-01/2026-10-24")).hasSize(1);
+    }
+
+    @Test
+    void weightOfAPlainScaleAndAWeightTypedInBeforeTheSmartScale() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2025-12-01/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-20","allWeightMetrics":[
+                  {"weight":76000.0,"bmi":23.4,"bodyFat":18.9,"timestampGMT":1792479900000,
+                   "sourceType":"INDEX_SCALE"},
+                  {"weight":76200.0,"bmi":23.5,"timestampGMT":1792479600000,"sourceType":"USER_SETTING"}]},
+                 {"summaryDate":"2025-12-02","allWeightMetrics":[{"weight":77450.0}]}]}""");
+
+        assertThat(run("weight", "2025-12-01", "2026-10-24")).isZero();
+
+        // Across two years, so the dates have them. No time for the weigh-in on 2 December.
+        assertThat(out()).isEqualTo("""
+                Date             Time    Weight  Body fat  BMI   Weigh-ins
+                Tue 2 Dec 2025   –      77.5 kg  –         –     1
+                Tue 20 Oct 2026  08:00  76.2 kg  18.9%     23.4  2*
+                * Body composition from another weigh-in that day than the weight.
+                2 days with a weigh-in from Mon 1 Dec 2025 to Sat 24 Oct 2026.
+                First 77.5 kg (Tue 2 Dec 2025), last 76.2 kg (Tue 20 Oct 2026): -1.3 kg.
+                Lowest 76.2 kg (Tue 20 Oct 2026), highest 77.5 kg (Tue 2 Dec 2025).
+                """);
+    }
+
+    @Test
+    void aWeightTypedInWithABmiBeforeTheScaleMarksTheDay() {
+        // As in the real capture, the typed-in weight has a BMI. 07:30, then the scale at 07:35.
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-10-20/2026-10-24", 200, """
+                {"dailyWeightSummaries":[
+                 {"summaryDate":"2026-10-20","allWeightMetrics":[
+                  {"weight":75900.0,"bmi":23.3,"bodyFat":18.2,"bodyWater":55.4,"muscleMass":33100.0,
+                   "boneMass":3200.0,"timestampGMT":1792478100000,"sourceType":"INDEX_SCALE"},
+                  {"weight":76200.0,"bmi":23.5,"timestampGMT":1792477800000,"sourceType":"USER_SETTING"}]}]}""");
+
+        assertThat(run("weight", "2026-10-20")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Date        Time    Weight  Body fat  Body water   Muscle    Bone  BMI   Weigh-ins
+                Tue 20 Oct  07:30  76.2 kg  18.2%     55.4%       33.1 kg  3.2 kg  23.3  2*
+                * Body composition from another weigh-in that day than the weight.
+                1 day with a weigh-in from Tue 20 Oct to Sat 24 Oct.
+                First 76.2 kg (Tue 20 Oct), last 76.2 kg (Tue 20 Oct): no change.
+                Lowest 76.2 kg (Tue 20 Oct), highest 76.2 kg (Tue 20 Oct).
+                """);
+    }
+
+    @Test
+    void weightRateLimitedIsExitCodeOne() {
+        signedIn();
+        garmin.respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 429, "");
+
+        assertThat(run("weight")).isEqualTo(1);
+
+        assertThat(err()).isEqualTo("Garmin is rate limiting. Wait a while (an hour or more) before trying again.\n");
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24")).hasSize(1);
+    }
+
+    @Test
+    void weightsBadRangesAreExitCodeTwoWithNothingSent() {
+        assertThat(run("weight", "2026-10-23", "2026-10-22")).isEqualTo(2);
+        assertThat(run("weight", "2027-03-01", "2028-03-02")).isEqualTo(2);
+
+        assertThat(err().lines()).containsExactly("2026-10-23 is after 2026-10-22. Put the earlier date first.",
+                "weight covers at most 367 days. 2027-03-01 to 2028-03-02 is 368 days, both included.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void weightsFromAfterTodayOrTooLongAgoAsksForNoWeighIns() {
+        // Today comes from the profile's time zone, so that is asked for, but no weigh-ins.
+        signedIn();
+
+        assertThat(run("weight", "2026-10-25")).isEqualTo(2);
+        assertThat(run("weight", "2025-10-22")).isEqualTo(2);
+
+        assertThat(err().lines()).containsExactly("2026-10-25 is after today (2026-10-24).",
+                "weight covers at most 367 days. 2025-10-22 to 2026-10-24 is 368 days, both included.");
+        assertThat(garmin.requests()).noneMatch(request -> request.path().startsWith(WEIGHT_RANGE_PATH));
     }
 
     // sleep
@@ -479,10 +608,12 @@ class DataCommandsTest {
         garmin.respond(ACTIVITIES, 200, "[]").respond(ACTIVITIES, 200, "[]")
                 .respond(ACTIVITY, 200, Fixtures.read("activity.json")).respond(SPLITS, 200, "{}")
                 .respond(ACTIVITY, 200, Fixtures.read("activity.json")).respond(SPLITS, 200, "{}")
-                .respond(SLEEP, 204, "").respond(SLEEP, 204, "");
+                .respond(SLEEP, 204, "").respond(SLEEP, 204, "")
+                .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}")
+                .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}");
 
         for (List<String> command : List.of(List.of("activities"), List.of("activity", "24816092240"),
-                List.of("sleep"))) {
+                List.of("sleep"), List.of("weight"))) {
             assertThat(run(command)).isZero();
             assertThat(run(withNoCache(command))).isZero();
         }
@@ -490,6 +621,7 @@ class DataCommandsTest {
         assertThat(garmin.requests(ACTIVITIES)).hasSize(2);
         assertThat(garmin.requests(ACTIVITY)).hasSize(2);
         assertThat(garmin.requests(SLEEP)).hasSize(2);
+        assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24")).hasSize(2);
     }
 
     @Test
@@ -559,9 +691,11 @@ class DataCommandsTest {
         for (String date : List.of("2026-13-01", "2026-02-30", "23-10-2026", "yesterday", "2026-10-2")) {
             assertThat(run("summary", date)).as(date).isEqualTo(2);
             assertThat(run("sleep", date)).as(date).isEqualTo(2);
+            assertThat(run("weight", date)).as(date).isEqualTo(2);
+            assertThat(run("weight", "2026-10-01", date)).as(date).isEqualTo(2);
         }
 
-        assertThat(err().lines()).hasSize(10).containsOnly("Dates look like 2026-10-22.");
+        assertThat(err().lines()).hasSize(20).containsOnly("Dates look like 2026-10-22.");
         assertThat(garmin.requests()).isEmpty();
     }
 
@@ -598,7 +732,8 @@ class DataCommandsTest {
     void aMissingOrExtraArgumentPrintsUsage() {
         for (List<String> args : List.of(List.of("activity"), List.of("activity", "1", "2"),
                 List.of("activities", "7"), List.of("summary", "2026-10-22", "2026-10-23"),
-                List.of("sleep", "2026-10-22", "extra"))) {
+                List.of("sleep", "2026-10-22", "extra"),
+                List.of("weight", "2026-10-01", "2026-10-02", "2026-10-03"))) {
             out.reset();
             err.reset();
             assertThat(run(args)).as(args.toString()).isEqualTo(2);
@@ -622,7 +757,8 @@ class DataCommandsTest {
         err.reset();
 
         assertThat(run("whoami", "--no-cache")).isEqualTo(2);
-        assertThat(err()).startsWith("--no-cache only works with activities, activity, summary and sleep.\nUsage:");
+        assertThat(err()).startsWith("--no-cache only works with activities, activity, summary, sleep and weight."
+                + "\nUsage:");
         err.reset();
 
         assertThat(run("sleep", "--no-cache=yes")).isEqualTo(2);
@@ -647,7 +783,8 @@ class DataCommandsTest {
         assertThat(run("activities", "--help")).isZero();
 
         assertThat(out()).contains("activities", "--days N", "today included (1 to 90)", "--type T", "activity <id>",
-                "summary [date]", "sleep [date]", "--no-cache", "Dates look like 2026-10-22.");
+                "summary [date]", "sleep [date]", "weight [from] [to]", "Default the last 30 days",
+                "At most 367 days", "--no-cache", "summary, sleep or weight", "Dates look like 2026-10-22.");
         assertThat(err()).isEmpty();
         assertThat(garmin.requests()).isEmpty();
     }

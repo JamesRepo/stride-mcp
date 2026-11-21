@@ -70,7 +70,7 @@ Body Battery     lowest 30, highest 96
 Intensity        0 min moderate, 2 min vigorous
 Floors climbed   7
 Sleep            8:52:00, score 91 (Excellent)
-Weight           75.4 kg (latest of 2 weigh-ins)
+Weight           75.9 kg (first of 2 weigh-ins; body composition from another weigh-in)
   BMI            23.3
   Body fat       18.6%
   Body water     55.1%
@@ -598,7 +598,7 @@ The owner asked for `summary` to show the day's sleep and weight too. It now mak
 | Part | Comes from | Shows |
 |---|---|---|
 | Sleep | The same call as `sleep`: the night that **ended** that morning | Time asleep and the score. `sleep` has the full detail. |
-| Weight | `weighIns(date)`: that day's weigh-ins only | The latest weight that day, and the latest body composition (BMI, body fat %, body water %, muscle mass, bone mass, visceral fat, metabolic age) when a scale sent it |
+| Weight | `weighIns(date)`: that day's weigh-ins only | The first weight that day, and the first body composition (the latest until 20 November 2026: see [Phase 4a](phase-4a-weight.md#decisions-to-make)) (BMI, body fat %, body water %, muscle mass, bone mass, visceral fat, metabolic age) when a scale sent it |
 
 | Decision | Why |
 |---|---|

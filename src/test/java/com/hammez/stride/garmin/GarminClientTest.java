@@ -353,8 +353,8 @@ class GarminClientTest {
         garmin.respond(WEIGHT, Map.of("includeAll", "true"), 200, Fixtures.TWO_WEIGH_INS);
 
         assertThat(client.weighIns(OCT_23)).containsExactly(
-                new WeighIn(OCT_23, Instant.ofEpochMilli(1792737600000L), 75.9, null, null, null, null, null, null,
-                        null),
+                new WeighIn(OCT_23, Instant.ofEpochMilli(1792737600000L), 75.9, 23.42, null, null, null, null,
+                        null, null),
                 new WeighIn(OCT_23, Instant.ofEpochMilli(1792737900000L), 75.4, 23.27, 18.6, 55.1, 33.1, 3.2, null,
                         null));
     }

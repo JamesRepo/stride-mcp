@@ -18,8 +18,9 @@ import org.springframework.ai.mcp.annotation.McpToolParam;
 import com.hammez.stride.garmin.ActivityDetails;
 import com.hammez.stride.garmin.GarminClient;
 import com.hammez.stride.garmin.GarminDataConfig;
-import com.hammez.stride.garmin.WeighIn;
 import com.hammez.stride.garmin.UnexpectedReplyException;
+import com.hammez.stride.garmin.WeighIn;
+import com.hammez.stride.garmin.WeightHistory;
 import com.hammez.stride.garmin.auth.GarminException;
 import com.hammez.stride.garmin.auth.NotFoundException;
 import com.hammez.stride.garmin.auth.TokenFileException;
@@ -28,7 +29,7 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 
 /**
- * The four MCP tools, found by Spring AI's annotation scanner (serve mode only, see {@link McpBeans}). Each checks
+ * The five MCP tools, found by Spring AI's annotation scanner (serve mode only, see {@link McpBeans}). Each checks
  * its input first, so a bad one never reaches Garmin, then asks {@link GarminClient} and returns
  * {@link ToolReplies}' JSON as text. All read-only.
  * <p>
@@ -46,7 +47,8 @@ class GarminTools {
     private static final Logger log = LoggerFactory.getLogger(GarminTools.class);
 
     // The numbers come from GarminDataConfig, so the descriptions can't drift from the checks. GarminToolsTest
-    // checks that the example range is MAX_RANGE_DAYS long, and that REFRESH matches the cache lifetimes.
+    // checks that the example range is MAX_RANGE_DAYS long, and that REFRESH and GET_WEIGHT match the cache
+    // lifetimes.
     static final String GET_ACTIVITIES = """
             Lists the owner's Garmin Connect activities (runs, rides, strength sessions, walks and others) that \
             started between two dates, newest first. For each: id, name, type, local start time, distance in km, \
@@ -68,16 +70,34 @@ class GarminTools {
             The owner's totals for one day from Garmin: steps and step goal, distance, calories (total and active), \
             resting, minimum and maximum heart rate, average stress (0 to 100), lowest and highest Body Battery \
             (0 to 100), moderate and vigorous intensity minutes, and floors climbed. If the owner weighed in that \
-            day, also the latest weight in kg and the latest body composition: BMI, body fat and body water in %, \
-            muscle and bone mass in kg, visceral fat rating and metabolic age. Fields Garmin didn't record are left \
-            out. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers grow \
-            as the watch syncs.""";
+            day, also the day's first weight in kg and the first body composition: BMI, body fat and body water in \
+            %, muscle and bone mass in kg, visceral fat rating and metabolic age. Fields Garmin didn't record are \
+            left out. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers \
+            grow as the watch syncs. For weight over several days, use get_weight.""";
 
     static final String GET_SLEEP = """
             The owner's sleep for the night that ended on the morning of `date`: when it started and ended, time \
             asleep, deep, light and REM sleep, time awake, the sleep score (0 to 100) with Garmin's label, average \
             breathing rate and average SpO2. `date` is like 2026-10-23, which means the night of 22 to 23 October. \
             Leave it out for last night.""";
+
+    static final String GET_WEIGHT = """
+            The owner's weight and body composition from Garmin (a Garmin scale, or a weight typed in on Garmin \
+            Connect): one entry per day with a weigh-in, oldest first. Days with no weigh-in are left out. For each \
+            day: date, time of the weigh-in that gave the weight (local, like 07:37), weightKg in kg, \
+            bodyFatPercent and bodyWaterPercent in % (18.5 means 18.5%), muscleMassKg and boneMassKg in kg, bmi, \
+            visceralFat (Garmin's rating), metabolicAge in years, and weighIns (how many that day). A day's weight \
+            is its first weigh-in, and its body composition the first scale reading (a weight typed in has only a \
+            BMI); bodyCompositionFromAnotherWeighIn is true when they differ. Fields the scale didn't send are left \
+            out. `summary` gives the first and last weight, changeKg \
+            (last minus first), the lowest and highest, and how many days had a weigh-in: use it rather than adding \
+            up the days yourself. Use this tool for weight over time, such as "how has my weight changed since \
+            September?". get_daily_summary gives one day's weight with that day's other totals. `from` and `to` \
+            are dates like 2026-09-01, both included, in the owner's time zone, covering at most \
+            """ + GarminDataConfig.MAX_WEIGHT_RANGE_DAYS + " days, so a year to the same date fits. Leave both "
+            + "out for the last " + GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS + " days, today included. A range "
+            + "ending before yesterday is cached for a day, or an hour if it had no weigh-ins. The reply also gives "
+            + "today's date in the owner's time zone.";
 
     static final String REFRESH = "Only set this when the owner says data is missing or they just synced their "
             + "watch, or an activity looks unfinished (Garmin was still processing it). Replies are cached: today's "
@@ -111,22 +131,14 @@ class GarminTools {
             LocalDate last = date("to", to);
             String typeKey = blank(type) ? null : type.strip().toLowerCase(Locale.ROOT);
             if (first != null && last != null) {
-                checkRange(first, last);
+                checkRange(first, last, GarminDataConfig.MAX_RANGE_DAYS);
             }
             GarminClient client = client(refresh);
             LocalDate today = client.today();
-            if (last == null) {
-                if (first != null && first.isAfter(today)) {
-                    throw new BadInput("`from` (" + first + ") is after today (" + today + ").");
-                }
-                last = today;
-            }
-            if (first == null) {
-                first = last.minusDays(GarminDataConfig.DEFAULT_RANGE_DAYS - 1);
-            }
-            checkRange(first, last);
-            return replies.activities(client.activities(first, last, typeKey), first, last, typeKey, today,
-                    client.zone());
+            Range range = range(first, last, today, GarminDataConfig.DEFAULT_RANGE_DAYS,
+                    GarminDataConfig.MAX_RANGE_DAYS);
+            return replies.activities(client.activities(range.from(), range.to(), typeKey), range.from(),
+                    range.to(), typeKey, today, client.zone());
         });
     }
 
@@ -193,6 +205,31 @@ class GarminTools {
             LocalDate today = client.today();
             LocalDate which = morning == null ? today : morning;
             return replies.sleep(which, client.sleep(which), today, client.zone());
+        });
+    }
+
+    @McpTool(name = "get_weight", description = GET_WEIGHT,
+            annotations = @McpAnnotations(readOnlyHint = true, destructiveHint = false))
+    CallToolResult getWeight(
+            @McpToolParam(required = false, description = "First day, like 2026-09-01, in the owner's time zone. "
+                    + "Leave out from and to for the last " + GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS + " days.")
+            String from,
+            @McpToolParam(required = false, description = "Last day, like 2026-11-20, included. Leave out for "
+                    + "today.") String to,
+            @McpToolParam(required = false, description = REFRESH) Boolean refresh,
+            CallToolRequest request) {
+        return call("get_weight", request, List.of("from", "to", "refresh"), () -> {
+            LocalDate first = date("from", from);
+            LocalDate last = date("to", to);
+            if (first != null && last != null) {
+                checkRange(first, last, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+            }
+            GarminClient client = client(refresh);
+            LocalDate today = client.today();
+            Range range = range(first, last, today, GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS,
+                    GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+            WeightHistory history = WeightHistory.of(client.weighIns(range.from(), range.to()));
+            return replies.weight(history, range.from(), range.to(), today, client.zone());
         });
     }
 
@@ -277,15 +314,40 @@ class GarminTools {
         }
     }
 
-    private static void checkRange(LocalDate from, LocalDate to) {
+    /**
+     * The range to ask for, from the inputs: both left out is the {@code defaultDays} ending today, only {@code to}
+     * is the {@code defaultDays} ending there, and only {@code from} is from there to today.
+     *
+     * @param from null if left out
+     * @param to   null if left out
+     */
+    private static Range range(LocalDate from, LocalDate to, LocalDate today, int defaultDays, int maxDays) {
+        if (to == null) {
+            if (from != null && from.isAfter(today)) {
+                throw new BadInput("`from` (" + from + ") is after today (" + today + ").");
+            }
+            to = today;
+        }
+        if (from == null) {
+            from = to.minusDays(defaultDays - 1);
+        }
+        checkRange(from, to, maxDays);
+        return new Range(from, to);
+    }
+
+    private static void checkRange(LocalDate from, LocalDate to, int maxDays) {
         if (from.isAfter(to)) {
             throw new BadInput("`from` (" + from + ") is after `to` (" + to + "). Put the earlier date first.");
         }
         long days = ChronoUnit.DAYS.between(from, to) + 1;
-        if (days > GarminDataConfig.MAX_RANGE_DAYS) {
-            throw new BadInput("The range can be at most " + GarminDataConfig.MAX_RANGE_DAYS + " days. " + from
-                    + " to " + to + " is " + days + " days, both included.");
+        if (days > maxDays) {
+            throw new BadInput("The range can be at most " + maxDays + " days. " + from + " to " + to + " is "
+                    + days + " days, both included.");
         }
+    }
+
+    /** Both days included. */
+    private record Range(LocalDate from, LocalDate to) {
     }
 
     private static boolean blank(String value) {

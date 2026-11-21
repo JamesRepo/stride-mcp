@@ -41,7 +41,7 @@ record DayReply(
     }
 
     /**
-     * The day's latest weight, and the latest body composition (see {@code garmin.DayWeight}).
+     * The day's first weight, the first scale body composition, and the BMI (see {@code garmin.DayWeight}).
      *
      * @param weighIns                          how many weigh-ins the day had
      * @param bodyCompositionFromAnotherWeighIn true if the body composition isn't from the weigh-in that gave the

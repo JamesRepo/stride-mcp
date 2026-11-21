@@ -18,6 +18,7 @@ import com.hammez.stride.garmin.Lap;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.Units;
 import com.hammez.stride.garmin.WeighIn;
+import com.hammez.stride.garmin.WeightHistory;
 
 import tools.jackson.databind.MapperFeature;
 import tools.jackson.databind.json.JsonMapper;
@@ -33,6 +34,7 @@ import tools.jackson.databind.json.JsonMapper;
 final class ToolReplies {
 
     private static final DateTimeFormatter MINUTE = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm", Locale.ROOT);
+    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ROOT);
 
     // Fields in the records' order (today first), not sorted. Compact: an AI reads it as well, in fewer tokens.
     private final JsonMapper json = JsonMapper.builder()
@@ -114,7 +116,7 @@ final class ToolReplies {
      * @param weightLeftOut why the weigh-ins couldn't be read, or null
      */
     DayReply day(DailySummary day, List<WeighIn> weighIns, String weightLeftOut, LocalDate today, ZoneId zone) {
-        DayReply.Weight weight = DayWeight.of(weighIns).map(ToolReplies::weight).orElse(null);
+        DayReply.Weight weight = DayWeight.of(weighIns).map(ToolReplies::dayWeight).orElse(null);
         if (weight == null && day.isEmpty()) {
             return DayReply.notRecorded(today.toString(), zone.getId(), day.date().toString(), weightLeftOut);
         }
@@ -142,19 +144,55 @@ final class ToolReplies {
                 weightLeftOut);
     }
 
-    private static DayReply.Weight weight(DayWeight day) {
+    private static DayReply.Weight dayWeight(DayWeight day) {
         WeighIn body = day.bodyComposition();
         return new DayReply.Weight(
                 day.weight() == null ? null : oneDecimal(day.weight().weightKilograms()),
                 day.weighIns(),
                 day.fromDifferentWeighIns() ? Boolean.TRUE : null,
-                body == null ? null : oneDecimal(body.bmi()),
+                oneDecimal(day.bmi()),
                 body == null ? null : oneDecimal(body.bodyFatPercent()),
                 body == null ? null : oneDecimal(body.bodyWaterPercent()),
                 body == null ? null : oneDecimal(body.muscleMassKilograms()),
                 body == null ? null : oneDecimal(body.boneMassKilograms()),
                 body == null ? null : body.visceralFat(),
                 body == null ? null : body.metabolicAgeYears());
+    }
+
+    /**
+     * @param from first day asked for
+     * @param to   last day asked for
+     * @param zone the owner's, for the times of the weigh-ins
+     */
+    WeightReply weight(WeightHistory history, LocalDate from, LocalDate to, LocalDate today, ZoneId zone) {
+        var days = history.days().stream().map(day -> weighInDay(day, zone)).toList();
+        var summary = new WeightReply.Summary(history.days().size(), point(history.first()), point(history.last()),
+                history.changeKilograms(), point(history.lowest()), point(history.highest()));
+        return new WeightReply(today.toString(), zone.getId(), from.toString(), to.toString(), summary, days);
+    }
+
+    private static WeightReply.Day weighInDay(DayWeight day, ZoneId zone) {
+        WeighIn body = day.bodyComposition();
+        Instant time = day.picked().time();
+        return new WeightReply.Day(
+                day.date().toString(),
+                time == null ? null : CLOCK.format(time.atZone(zone)),
+                day.weight() == null ? null : oneDecimal(day.weight().weightKilograms()),
+                body == null ? null : oneDecimal(body.bodyFatPercent()),
+                body == null ? null : oneDecimal(body.bodyWaterPercent()),
+                body == null ? null : oneDecimal(body.muscleMassKilograms()),
+                body == null ? null : oneDecimal(body.boneMassKilograms()),
+                oneDecimal(day.bmi()),
+                body == null ? null : body.visceralFat(),
+                body == null ? null : body.metabolicAgeYears(),
+                day.weighIns(),
+                day.fromDifferentWeighIns() ? Boolean.TRUE : null);
+    }
+
+    /** A day's date and weight, or null for no day. */
+    private static WeightReply.Point point(DayWeight day) {
+        return day == null ? null
+                : new WeightReply.Point(day.date().toString(), oneDecimal(day.weight().weightKilograms()));
     }
 
     /**
@@ -204,7 +242,7 @@ final class ToolReplies {
     }
 
     private static Double oneDecimal(Double value) {
-        return value == null ? null : Math.round(value * 10) / 10.0;
+        return Units.oneDecimal(value);
     }
 
     private static String minute(LocalDateTime time) {

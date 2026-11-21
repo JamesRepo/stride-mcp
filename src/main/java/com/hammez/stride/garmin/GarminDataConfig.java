@@ -127,6 +127,12 @@ public record GarminDataConfig(
     public static final int DEFAULT_RANGE_DAYS = 7;
 
     /**
+     * The range of weigh-ins, in days with today included, used when none is given: the CLI's {@code weight} and
+     * {@code get_weight} without {@code from} and {@code to}. Enough for a trend (phase 4a).
+     */
+    public static final int DEFAULT_WEIGHT_RANGE_DAYS = 30;
+
+    /**
      * The query for {@code weighInsPath} and {@code weighInsRangePath}: every weigh-in, not one a day. The client and
      * {@code capture} both send this.
      */

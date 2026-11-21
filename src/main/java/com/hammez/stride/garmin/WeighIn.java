@@ -27,9 +27,13 @@ public record WeighIn(
         Integer visceralFat,
         Integer metabolicAgeYears) {
 
-    /** True if it has any value besides the weight. */
-    public boolean hasBodyComposition() {
-        return bmi != null || bodyFatPercent != null || bodyWaterPercent != null || muscleMassKilograms != null
+    /**
+     * True if it has a value only a scale measures: body fat, body water, muscle or bone mass, visceral fat or
+     * metabolic age. Not the BMI: Garmin works that out for a weight typed in on Garmin Connect too (seen in the
+     * capture, 20 November 2026).
+     */
+    public boolean hasScaleBodyComposition() {
+        return bodyFatPercent != null || bodyWaterPercent != null || muscleMassKilograms != null
                 || boneMassKilograms != null || visceralFat != null || metabolicAgeYears != null;
     }
 }

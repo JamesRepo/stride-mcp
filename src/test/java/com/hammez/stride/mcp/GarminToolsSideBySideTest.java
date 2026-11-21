@@ -15,6 +15,8 @@ import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
 import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
 import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_SINCE_OCTOBER;
 import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -106,12 +108,13 @@ class GarminToolsSideBySideTest {
         }
     }
 
-    /** All four tools, each twice: two calls for the same day or activity at once. */
+    /** All five tools, each twice: two calls for the same day, range or activity at once. */
     private static final List<Call> CALLS = Stream.of(
             new Call("get_activities", Map.of(), LAST_SEVEN_DAYS),
             new Call("get_activity", Map.of("id", 24816092240L), STAIR_STEPPER),
             new Call("get_daily_summary", Map.of("date", "2026-10-23"), DAY_WITH_TWO_WEIGH_INS),
-            new Call("get_sleep", Map.of("date", "2026-10-23"), LAST_NIGHT))
+            new Call("get_sleep", Map.of("date", "2026-10-23"), LAST_NIGHT),
+            new Call("get_weight", Map.of("from", "2026-10-22", "to", "2026-11-20"), WEIGHT_SINCE_OCTOBER))
             .flatMap(call -> Stream.of(call, call))
             .toList();
 
@@ -145,7 +148,8 @@ class GarminToolsSideBySideTest {
                     .respond(SPLITS, 200, Fixtures.read("activity-splits.json"))
                     .respond(SUMMARY, 200, Fixtures.read("summary-today.json"))
                     .respond(WEIGHT_PATH + "2026-10-23", 200, Fixtures.TWO_WEIGH_INS)
-                    .respond(SLEEP, 200, Fixtures.read("sleep-last-night.json"));
+                    .respond(SLEEP, 200, Fixtures.read("sleep-last-night.json"))
+                    .respond(WEIGHT_RANGE, 200, Fixtures.read("weight-range.json"));
         }
         // Proof they really ran at once: Garmin holds a summary and a sleep request until both have arrived.
         garmin.together(SUMMARY, SLEEP);

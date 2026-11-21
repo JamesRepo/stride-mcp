@@ -66,7 +66,7 @@ This prints who you're logged in as. It refreshes the login by itself when neede
 
 ## 4. Read your data
 
-Four commands. The examples come from real Garmin replies (October 2026).
+Five commands. The examples come from real Garmin replies (October 2026, and November 2026 for weight).
 
 | Command | Shows |
 |---|---|
@@ -74,6 +74,7 @@ Four commands. The examples come from real Garmin replies (October 2026).
 | `activity <id>` | One activity, with its laps |
 | `summary [date]` | One day's totals, last night's sleep, and weight |
 | `sleep [date]` | One night's sleep |
+| `weight [from] [to]` | Weight and body composition for each day, and the change |
 
 ### Activities
 
@@ -124,7 +125,7 @@ Weight           75.4 kg
 …
 ```
 
-It also shows stress, Body Battery, intensity minutes and floors climbed. Sleep is the night that ended that morning. Weight is that day's latest weigh-in, with the latest body composition your scale sent that day. A part with no data is left out. If Garmin's reply for sleep or weight can't be read, that part is left out with a line saying why, and you still get the totals. With no date, it's today.
+It also shows stress, Body Battery, intensity minutes and floors climbed. Sleep is the night that ended that morning. Weight is that day's first weigh-in, and body composition the first your scale sent that day (if you typed a weight in first, they come from different weigh-ins, and it says so). A weight typed in has only a BMI, so it never counts as body composition. A part with no data is left out. If Garmin's reply for sleep or weight can't be read, that part is left out with a line saying why, and you still get the totals. With no date, it's today.
 
 ### Sleep
 
@@ -144,6 +145,28 @@ SpO2             97% average
 ```
 
 Sleep times are always `h:mm:ss`, so `0:08:00` is 8 minutes. With no date, it's last night.
+
+### Weight
+
+```
+$ stride-mcp weight 2026-10-22 2026-11-20
+Date        Time    Weight  Body fat  Body water   Muscle    Bone  BMI   Weigh-ins
+Fri 23 Oct  07:37  75.7 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.4  1
+Sat 14 Nov  08:31  75.8 kg  –         –                 –       –  23.4  2
+Tue 17 Nov  07:15  76.0 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.5  1
+Fri 20 Nov  08:35  76.1 kg  18.0%     55.3%       33.0 kg  3.2 kg  23.5  1
+4 days with a weigh-in from Thu 22 Oct to Fri 20 Nov.
+First 75.7 kg (Fri 23 Oct), last 76.1 kg (Fri 20 Nov): +0.4 kg.
+Lowest 75.7 kg (Fri 23 Oct), highest 76.1 kg (Fri 20 Nov).
+```
+
+One line per day with a weigh-in. Days without one are left out. A day's weight is its **first** weigh-in, as in `summary`. A `*` after the count means that day's body composition came from another weigh-in. A column your scale never filled in is left out. The 14 November weights were typed in on Garmin Connect, so they have only the BMI Garmin works out.
+
+| You type | You get |
+|---|---|
+| `weight` | The last 30 days, today included |
+| `weight 2026-09-01` | 1 September to today |
+| `weight 2026-09-01 2026-09-30` | September. At most 367 days, so a year to the same date always fits. |
 
 ### Dates and options
 
@@ -166,6 +189,7 @@ Garmin's replies are kept on disk, so running a command again answers from there
 | Anything for today or yesterday | 10–15 minutes |
 | An older day's summary, sleep or weight | 30 days |
 | An older list of activities | 1 day |
+| Older weigh-ins over a range (`weight`) | 1 day, or 1 hour if there were none |
 | One activity | 7 days |
 
 Add `--no-cache` to ask Garmin anyway. The new reply is still saved. The full rules are in [Phase 2: Data](phases/phase-2-data.md#caching).
@@ -190,7 +214,7 @@ Claude Desktop, Codex CLI, the settings, and what to do if it doesn't connect: [
 
 ### What the AI can do
 
-stride-mcp gives the AI four **tools**. It picks the ones your question needs.
+stride-mcp gives the AI five **tools**. It picks the ones your question needs.
 
 | Tool | Answers | Ask, for example |
 |---|---|---|
@@ -198,8 +222,9 @@ stride-mcp gives the AI four **tools**. It picks the ones your question needs.
 | `get_activity` | One activity in detail: laps, heart rate, cadence, power, training effect | "How even were my laps on Thursday's run?" |
 | `get_daily_summary` | One day's steps, calories, heart rate, stress, Body Battery, and weight | "How active was I yesterday?" |
 | `get_sleep` | One night's sleep: times, stages, score | "How did I sleep last night?" |
+| `get_weight` | Weight and body composition for each day with a weigh-in (up to 367 days), with the change, lowest and highest | "How has my weight changed since September?" |
 
-They only read: nothing is changed in Garmin Connect. Replies use the same cache as the commands. Say "I just synced my watch" to make the AI ask Garmin again. What each tool sends back, in detail: [Phase 3: MCP server](phases/phase-3-mcp.md#the-tools).
+They only read: nothing is changed in Garmin Connect. Replies use the same cache as the commands. Say "I just synced my watch" to make the AI ask Garmin again. What each tool sends back, in detail: [Phase 3: MCP server](phases/phase-3-mcp.md#the-tools), and for `get_weight`, [Phase 4a: Weight](phases/phase-4a-weight.md#the-tool-get_weight).
 
 ## 6. Log out (optional)
 

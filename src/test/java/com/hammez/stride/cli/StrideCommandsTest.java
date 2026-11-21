@@ -113,7 +113,7 @@ class StrideCommandsTest {
         assertThat(commands.run(List.of("--type", "running", "serve"))).isEqualTo(2);
         assertThat(commands.run(List.of("serve", "--no-cache"))).isEqualTo(2);
         assertThat(err()).contains("--days and --type only work with activities.",
-                "--no-cache only works with activities, activity, summary and sleep.");
+                "--no-cache only works with activities, activity, summary, sleep and weight.");
     }
 
     @Test

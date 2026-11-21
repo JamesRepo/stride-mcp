@@ -115,7 +115,9 @@ The AI reads the descriptions to choose a tool. So they say what comes back, wha
 
 > **get_activity**: One Garmin activity in detail: start time, type, distance, time and moving time, pace and fastest pace, elevation gain, heart rate, cadence, power, calories, aerobic and anaerobic training effect (0 to 5), training load, and each lap's distance, time, pace, heart rate and elevation. Fields Garmin didn't record are left out. `id` is a number from get_activities.
 
-> **get_daily_summary**: The owner's totals for one day from Garmin: steps and step goal, distance, calories (total and active), resting, minimum and maximum heart rate, average stress (0 to 100), lowest and highest Body Battery (0 to 100), moderate and vigorous intensity minutes, and floors climbed. If the owner weighed in that day, also the latest weight in kg and the latest body composition: BMI, body fat and body water in %, muscle and bone mass in kg, visceral fat rating and metabolic age. Fields Garmin didn't record are left out. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers grow as the watch syncs.
+> **get_daily_summary**: The owner's totals for one day from Garmin: steps and step goal, distance, calories (total and active), resting, minimum and maximum heart rate, average stress (0 to 100), lowest and highest Body Battery (0 to 100), moderate and vigorous intensity minutes, and floors climbed. If the owner weighed in that day, also the day's first weight in kg and the first body composition: BMI, body fat and body water in %, muscle and bone mass in kg, visceral fat rating and metabolic age. Fields Garmin didn't record are left out. `date` is like 2026-10-22, in the owner's time zone. Leave it out for today. Today's numbers grow as the watch syncs. For weight over several days, use get_weight.
+>
+> (Changed 20 November 2026 from the latest weigh-in to the first, and the pointer to `get_weight` added: see [Phase 4a](phase-4a-weight.md).)
 
 > **get_sleep**: The owner's sleep for the night that ended on the morning of `date`: when it started and ended, time asleep, deep, light and REM sleep, time awake, the sleep score (0 to 100) with Garmin's label, average breathing rate and average SpO2. `date` is like 2026-10-23, which means the night of 22 to 23 October. Leave it out for last night.
 
@@ -192,7 +194,7 @@ How Spring AI 2.0.2 registers tools, found by reading its source and the MCP Jav
 
 Also settled:
 
-- **Weight in `get_daily_summary`** (owner's choice, 26 October 2026). The day's latest weight and latest body composition, picked as the CLI's `summary` does. The CLI and the tools share the picking (`garmin/DayWeight`). If the weigh-ins can't be read, the totals still come back, with `weightLeftOut` saying why. Sleep stays in `get_sleep`. The weigh-in field names and grams are still unconfirmed from a real weigh-in (see AGENTS.md).
+- **Weight in `get_daily_summary`** (owner's choice, 26 October 2026). The day's latest weight and latest body composition, picked as the CLI's `summary` does. Changed 20 November 2026 to the first of each ([Phase 4a](phase-4a-weight.md#decisions-to-make)). The CLI and the tools share the picking (`garmin/DayWeight`). If the weigh-ins can't be read, the totals still come back, with `weightLeftOut` saying why. Sleep stays in `get_sleep`. Field names and grams confirmed from a real weigh-in, 20 November 2026.
 - **Defaults when only one end is given:** only `to` means the 7 days ending then. Only `from` means from then to today.
 - **Blank inputs** (`""`) are taken as left out. Some AI apps send them for "no value".
 - **`type`** is trimmed and lower-cased (Garmin's keys are lower case).

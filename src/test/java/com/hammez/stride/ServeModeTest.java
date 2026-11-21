@@ -13,6 +13,8 @@ import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
 import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
 import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_SINCE_OCTOBER;
 import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -101,10 +103,11 @@ class ServeModeTest {
         assertThat(result.path("capabilities").path("tools").path("listChanged").asBoolean()).isFalse();
 
         assertThat(toolsList.path("id").asInt()).isEqualTo(2);
-        // The four tools, read-only, each with a description (GarminToolsTest checks the wording).
+        // The five tools, read-only, each with a description (GarminToolsTest checks the wording).
         JsonNode tools = toolsList.path("result").path("tools");
         assertThat(tools.valueStream().map(tool -> tool.path("name").asString()))
-                .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep");
+                .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep",
+                        "get_weight");
         for (JsonNode tool : tools) {
             assertThat(tool.path("description").asString()).as(tool.toString()).isNotBlank();
             assertThat(tool.path("annotations").path("readOnlyHint").asBoolean()).as(tool.toString()).isTrue();
@@ -202,7 +205,7 @@ class ServeModeTest {
         assertThat(garmin.requests(SLEEP)).singleElement().satisfies(request -> assertThat(
                 request.header("Authorization")).isEqualTo("Bearer " + FakeGarmin.ACCESS_TOKEN));
         assertThat(toolsList.path("id").asInt()).isEqualTo(2);
-        assertThat(toolsList.path("result").path("tools")).hasSize(4);
+        assertThat(toolsList.path("result").path("tools")).hasSize(5);
 
         assertOnlyJsonRpcOnStdout(server, 3);
         assertThat(server.stderr()).contains(FakeGarminServe.PRINTED);
@@ -220,6 +223,7 @@ class ServeModeTest {
                 .respond(SUMMARY, 200, Fixtures.read("summary-today.json"))
                 .respond(WEIGHT_PATH + "2026-10-23", 200, Fixtures.TWO_WEIGH_INS)
                 .respond(SLEEP, 200, Fixtures.read("sleep-last-night.json"))
+                .respond(WEIGHT_RANGE, 200, Fixtures.read("weight-range.json"))
                 // Answered one after another, the first of these would wait for the other until it gave up.
                 .together(SUMMARY, SLEEP);
         var server = startWithFakeGarmin();
@@ -227,12 +231,13 @@ class ServeModeTest {
         server.reply();
         server.send(INITIALIZED);
 
-        // All four sent before any reply is read, as an AI app may. Each reply is the one GarminToolsTest pins.
+        // All five sent before any reply is read, as an AI app may. Each reply is the one GarminToolsTest pins.
         var expected = Map.of(
                 10, LAST_SEVEN_DAYS,
                 11, STAIR_STEPPER,
                 12, DAY_WITH_TWO_WEIGH_INS,
-                13, LAST_NIGHT);
+                13, LAST_NIGHT,
+                14, WEIGHT_SINCE_OCTOBER);
         server.send("""
                 {"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"get_activities","arguments":{}}}""");
         server.send("""
@@ -244,6 +249,9 @@ class ServeModeTest {
         server.send("""
                 {"jsonrpc":"2.0","id":13,"method":"tools/call","params":{"name":"get_sleep",\
                 "arguments":{"date":"2026-10-23"}}}""");
+        server.send("""
+                {"jsonrpc":"2.0","id":14,"method":"tools/call","params":{"name":"get_weight",\
+                "arguments":{"from":"2026-10-22","to":"2026-11-20"}}}""");
         // In whatever order they finish. Wait for all of them before closing stdin: the SDK drops the rest.
         var replies = new HashMap<Integer, String>();
         for (int i = 0; i < expected.size(); i++) {
@@ -256,10 +264,10 @@ class ServeModeTest {
 
         assertThat(replies).containsOnlyKeys(expected.keySet());
         expected.forEach((id, pinned) -> assertThat(replies.get(id)).as("reply %d", id).isEqualTo(compact(pinned)));
-        // One profile lookup for all four: the display name and the time zone, asked for once each.
+        // One profile lookup for all five: the display name and the time zone, asked for once each.
         assertThat(garmin.requests(PROFILE_PATH)).hasSize(1);
         assertThat(garmin.requests(PERSONAL)).hasSize(1);
-        assertOnlyJsonRpcOnStdout(server, 5);
+        assertOnlyJsonRpcOnStdout(server, 6);
         assertNoTokens(server);
     }
 

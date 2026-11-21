@@ -3,7 +3,7 @@ package com.hammez.stride.garmin;
 import java.util.Locale;
 
 /**
- * Garmin's values as people read them: durations, pace and labels. Shared by the CLI's printing and the MCP tools'
+ * Garmin's values as people read them: durations, pace, rounding and labels. Shared by the CLI's printing and the MCP tools'
  * replies, so both show the same numbers for the same activity. Each returns null for a missing value; the CLI
  * shows that as "–", the tools leave it out.
  */
@@ -44,6 +44,11 @@ public final class Units {
     /** Null for 0 or less: Garmin's way of saying "doesn't apply" for an activity's distance, speed or time. */
     public static Double positive(Double value) {
         return value == null || value <= 0 ? null : value;
+    }
+
+    /** Rounded to 1 decimal place, such as a weight in kg. */
+    public static Double oneDecimal(Double value) {
+        return value == null ? null : Math.round(value * 10) / 10.0;
     }
 
     /** Garmin's {@code EXCELLENT} as "Excellent". */

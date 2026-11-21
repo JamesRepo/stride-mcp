@@ -27,6 +27,9 @@ public final class ToolFixtures {
     public static final String SUMMARY = "/usersummary-service/usersummary/daily/jo runner";
     public static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
     public static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
+    /** The range in weight-range.json: 30 days, both ends included. */
+    public static final String WEIGHT_RANGE = "/weight-service/weight/range/2026-10-22/2026-11-20";
+    public static final String WEIGHT_RANGE_PATH = "/weight-service/weight/range/";
 
     /** The log file the tools name in a bug's message. Nothing is written to it. */
     public static final String LOG_FILE = "/Users/owner/.stride-mcp/stride-mcp.log";
@@ -73,15 +76,18 @@ public final class ToolFixtures {
              "laps":[{"number":1,"duration":"10:02","durationSeconds":602,"averageHeartRateBpm":142,
                "maxHeartRateBpm":158}]}""";
 
-    /** get_daily_summary for 2026-10-23: summary-today.json and {@link Fixtures#TWO_WEIGH_INS}. */
+    /**
+     * get_daily_summary for 2026-10-23: summary-today.json and {@link Fixtures#TWO_WEIGH_INS}. The weight is the
+     * first weigh-in, typed in; the body composition is from the scale 5 minutes later.
+     */
     public static final String DAY_WITH_TWO_WEIGH_INS = """
             {"today":"2026-10-24","timeZone":"Europe/London","date":"2026-10-23","recorded":true,"steps":3532,
              "stepGoal":11190,"distanceKm":3.18,"totalKilocalories":1417,"activeKilocalories":222,
              "restingHeartRateBpm":45,"minHeartRateBpm":43,"maxHeartRateBpm":130,"averageStressLevel":20,
              "bodyBatteryLowest":30,"bodyBatteryHighest":96,"moderateIntensityMinutes":0,
              "vigorousIntensityMinutes":2,"floorsClimbed":7,
-             "weight":{"kilograms":75.4,"weighIns":2,"bmi":23.3,"bodyFatPercent":18.6,"bodyWaterPercent":55.1,
-               "muscleMassKilograms":33.1,"boneMassKilograms":3.2}}""";
+             "weight":{"kilograms":75.9,"weighIns":2,"bodyCompositionFromAnotherWeighIn":true,"bmi":23.3,
+               "bodyFatPercent":18.6,"bodyWaterPercent":55.1,"muscleMassKilograms":33.1,"boneMassKilograms":3.2}}""";
 
     /** get_sleep for 2026-10-23: sleep-last-night.json. */
     public static final String LAST_NIGHT = """
@@ -90,6 +96,24 @@ public final class ToolFixtures {
              "deepSleep":"1:31:00","deepSleepSeconds":5460,"lightSleep":"4:55:00","lightSleepSeconds":17700,
              "remSleep":"2:26:00","remSleepSeconds":8760,"awake":"0:08:00","awakeSeconds":480,"score":91,
              "quality":"Excellent","averageBreathsPerMinute":12.0,"averageSpo2Percent":97.0}""";
+
+    /**
+     * get_weight from 2026-10-22 to 2026-11-20: weight-range.json. Times in the profile's time zone: British Summer
+     * Time on 23 October, GMT in November. 14 November had two weights typed in, 4 seconds apart: the first counts.
+     */
+    public static final String WEIGHT_SINCE_OCTOBER = """
+            {"today":"2026-10-24","timeZone":"Europe/London","from":"2026-10-22","to":"2026-11-20",
+             "summary":{"daysWithWeighIns":4,"first":{"date":"2026-10-23","weightKg":75.7},
+               "last":{"date":"2026-11-20","weightKg":76.1},"changeKg":0.4,
+               "lowest":{"date":"2026-10-23","weightKg":75.7},"highest":{"date":"2026-11-20","weightKg":76.1}},
+             "days":[
+              {"date":"2026-10-23","time":"07:37","weightKg":75.7,"bodyFatPercent":18.0,"bodyWaterPercent":55.3,
+               "muscleMassKg":33.0,"boneMassKg":3.2,"bmi":23.4,"weighIns":1},
+              {"date":"2026-11-14","time":"08:31","weightKg":75.8,"bmi":23.4,"weighIns":2},
+              {"date":"2026-11-17","time":"07:15","weightKg":76.0,"bodyFatPercent":18.0,"bodyWaterPercent":55.3,
+               "muscleMassKg":33.0,"boneMassKg":3.2,"bmi":23.5,"weighIns":1},
+              {"date":"2026-11-20","time":"08:35","weightKg":76.1,"bodyFatPercent":18.0,"bodyWaterPercent":55.3,
+               "muscleMassKg":33.0,"boneMassKg":3.2,"bmi":23.5,"weighIns":1}]}""";
 
     /** Pretty JSON as one line, keeping its field order, to compare with a reply. */
     public static String compact(String pretty) {

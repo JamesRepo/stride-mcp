@@ -14,14 +14,15 @@ public final class Fixtures {
     /**
      * A day with two weigh-ins: a scale reading and a weight typed in. <b>Made up</b>, with the field names and units
      * of the real replies ({@code weight-today.json}, 20 November 2026). Masses in grams. Listed latest first, so
-     * tests see them sorted.
+     * tests see them sorted. The weight typed in comes first, so it's the day's weight, and the scale's body
+     * composition, 5 minutes later, is the day's body composition. Like a real weight typed in, it has only a BMI.
      */
     public static final String TWO_WEIGH_INS = """
             {"startDate":"2026-10-23","endDate":"2026-10-23","dateWeightList":[
              {"samplePk":2,"calendarDate":"2026-10-23","weight":75400.0,"bmi":23.27,"bodyFat":18.6,"bodyWater":55.1,
               "boneMass":3200.0,"muscleMass":33100.0,"physiqueRating":null,"visceralFat":null,"metabolicAge":null,
               "sourceType":"INDEX_SCALE","timestampGMT":1792737900000},
-             {"samplePk":1,"calendarDate":"2026-10-23","weight":75900.0,"bmi":null,"bodyFat":null,"bodyWater":null,
+             {"samplePk":1,"calendarDate":"2026-10-23","weight":75900.0,"bmi":23.42,"bodyFat":null,"bodyWater":null,
               "boneMass":null,"muscleMass":null,"sourceType":"MANUAL","timestampGMT":1792737600000}],
              "totalAverage":{"weight":75650.0}}""";
 

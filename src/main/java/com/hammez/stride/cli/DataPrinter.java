@@ -7,6 +7,7 @@ import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -20,6 +21,7 @@ import com.hammez.stride.garmin.Lap;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.Units;
 import com.hammez.stride.garmin.WeighIn;
+import com.hammez.stride.garmin.WeightHistory;
 
 /**
  * Prints Garmin data for a terminal, in metric units: km with 2 decimals, h:mm:ss or m:ss, min:ss /km.
@@ -38,6 +40,7 @@ final class DataPrinter {
     private static final DateTimeFormatter DATE_TIME =
             DateTimeFormatter.ofPattern("EEE d MMM yyyy, HH:mm", Locale.ENGLISH);
     private static final DateTimeFormatter DAY_TIME = DateTimeFormatter.ofPattern("EEE d MMM, HH:mm", Locale.ENGLISH);
+    private static final DateTimeFormatter CLOCK = DateTimeFormatter.ofPattern("HH:mm", Locale.ENGLISH);
     private static final int LABEL_WIDTH = 17;
 
     private final PrintStream out;
@@ -125,7 +128,7 @@ final class DataPrinter {
     }
 
     /**
-     * One day's totals, the night that ended that morning, and the day's latest weight and body composition.
+     * One day's totals, the night that ended that morning, and the day's first weight and body composition.
      * Or a line saying there is none of these.
      *
      * @param weighIns oldest first
@@ -167,6 +170,95 @@ final class DataPrinter {
     }
 
     /**
+     * A table of each day's weight and body composition, oldest first ({@link DayWeight}), then the summary: how
+     * many days had a weigh-in, the first and last weight and the change, and the lowest and highest. A column
+     * with nothing in it on any day is left out, so a plain scale shows only the weight. A day whose body
+     * composition is from another weigh-in than its weight is marked with a *.
+     *
+     * @param zone for the times of the weigh-ins: the Garmin profile's
+     */
+    void weight(WeightHistory history, LocalDate from, LocalDate to, ZoneId zone) {
+        DateTimeFormatter day = from.getYear() == to.getYear() ? DAY : DATE;
+        String period = "from " + day.format(from) + " to " + day.format(to);
+        if (history.days().isEmpty()) {
+            out.println("No weigh-ins " + period + ".");
+            return;
+        }
+        var columns = new ArrayList<Column>();
+        columns.add(new Column("Date", false, true));
+        columns.add(new Column("Time", false, false));
+        columns.add(new Column("Weight", true, true));
+        columns.add(new Column("Body fat", false, false));
+        columns.add(new Column("Body water", false, false));
+        columns.add(new Column("Muscle", true, false));
+        columns.add(new Column("Bone", true, false));
+        columns.add(new Column("BMI", false, false));
+        columns.add(new Column("Visceral fat", false, false));
+        columns.add(new Column("Metabolic age", false, false));
+        columns.add(new Column("Weigh-ins", false, true));
+        boolean marked = false;
+        for (DayWeight d : history.days()) {
+            WeighIn w = d.weight();
+            WeighIn b = d.bodyComposition();
+            Instant time = d.picked().time();
+            List<String> cells = List.of(
+                    day.format(d.date()),
+                    time == null ? NONE : CLOCK.format(time.atZone(zone)),
+                    w == null ? NONE : kilograms(w.weightKilograms()),
+                    b == null || b.bodyFatPercent() == null ? NONE : format("%.1f%%", b.bodyFatPercent()),
+                    b == null || b.bodyWaterPercent() == null ? NONE : format("%.1f%%", b.bodyWaterPercent()),
+                    b == null || b.muscleMassKilograms() == null ? NONE : kilograms(b.muscleMassKilograms()),
+                    b == null || b.boneMassKilograms() == null ? NONE : kilograms(b.boneMassKilograms()),
+                    d.bmi() == null ? NONE : format("%.1f", d.bmi()),
+                    b == null ? NONE : orNone(b.visceralFat()),
+                    b == null || b.metabolicAgeYears() == null ? NONE : b.metabolicAgeYears() + " years",
+                    d.weighIns() + (d.fromDifferentWeighIns() ? "*" : ""));
+            marked |= d.fromDifferentWeighIns();
+            for (int c = 0; c < columns.size(); c++) {
+                columns.get(c).cells().add(cells.get(c));
+            }
+        }
+        columns.removeIf(column -> !column.always() && column.cells().stream().allMatch(NONE::equals));
+        var rows = new ArrayList<List<String>>();
+        for (int r = 0; r < history.days().size(); r++) {
+            int row = r;
+            rows.add(columns.stream().map(column -> column.cells().get(row)).toList());
+        }
+        var rightAligned = new HashSet<Integer>();
+        for (int c = 0; c < columns.size(); c++) {
+            if (columns.get(c).rightAligned()) {
+                rightAligned.add(c);
+            }
+        }
+        table(columns.stream().map(Column::header).toList(), rows, rightAligned);
+        if (marked) {
+            out.println("* Body composition from another weigh-in that day than the weight.");
+        }
+        int count = history.days().size();
+        out.println(count + (count == 1 ? " day" : " days") + " with a weigh-in " + period + ".");
+        if (history.first() != null) {
+            double change = history.changeKilograms();
+            out.println("First " + weighed(history.first(), day) + ", last " + weighed(history.last(), day) + ": "
+                    + (change == 0 ? "no change" : format("%+.1f kg", change)) + ".");
+            out.println("Lowest " + weighed(history.lowest(), day) + ", highest " + weighed(history.highest(), day)
+                    + ".");
+        }
+    }
+
+    /** "75.7 kg (Fri 23 Oct)" */
+    private static String weighed(DayWeight day, DateTimeFormatter format) {
+        return kilograms(day.weight().weightKilograms()) + " (" + format.format(day.date()) + ")";
+    }
+
+    /** One column of the weight table, filled in row by row. */
+    private record Column(String header, boolean rightAligned, boolean always, List<String> cells) {
+
+        Column(String header, boolean rightAligned, boolean always) {
+            this(header, rightAligned, always, new ArrayList<>());
+        }
+    }
+
+    /**
      * The night that ended on the morning of {@code date}, or a line saying none was recorded. Durations are always
      * h:mm:ss here, so 8 minutes awake can't be read as 8 hours.
      *
@@ -202,7 +294,7 @@ final class DataPrinter {
     }
 
     /**
-     * The day's latest weight, with the latest body composition under it ({@link DayWeight}). If they come from
+     * The day's first weight, with the first body composition under it ({@link DayWeight}). If they come from
      * different weigh-ins, the weight line says so. Garmin gives muscle mass as a mass, so its share of the weight
      * is worked out, from the same weigh-in.
      *
@@ -215,17 +307,18 @@ final class DataPrinter {
         }
         DayWeight day = found.get();
         String notes = joined("; ",
-                day.weighIns() == 1 ? null : "latest of " + day.weighIns() + " weigh-ins",
+                day.weighIns() == 1 ? null : "first of " + day.weighIns() + " weigh-ins",
                 day.fromDifferentWeighIns() ? "body composition from another weigh-in" : null);
         lines.add("Weight", (day.weight() == null ? "not recorded" : kilograms(day.weight().weightKilograms()))
                 + (notes == null ? "" : " (" + notes + ")"));
+        lines.add("  BMI", day.bmi() == null ? null : format("%.1f", day.bmi()));
         if (day.bodyComposition() != null) {
             bodyComposition(lines, day.bodyComposition());
         }
     }
 
+    /** What only a scale measures. The BMI is the day's ({@link DayWeight#bmi()}). */
     private static void bodyComposition(Lines lines, WeighIn w) {
-        lines.add("  BMI", w.bmi() == null ? null : format("%.1f", w.bmi()));
         lines.add("  Body fat", w.bodyFatPercent() == null ? null : format("%.1f%%", w.bodyFatPercent()));
         lines.add("  Body water", w.bodyWaterPercent() == null ? null : format("%.1f%%", w.bodyWaterPercent()));
         lines.add("  Muscle mass", w.muscleMassKilograms() == null ? null
