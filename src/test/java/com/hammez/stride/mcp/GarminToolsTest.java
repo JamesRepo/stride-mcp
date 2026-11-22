@@ -2,16 +2,22 @@ package com.hammez.stride.mcp;
 
 import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY_TYPES;
 import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY;
 import static com.hammez.stride.mcp.ToolFixtures.DAY_WITH_TWO_WEIGH_INS;
 import static com.hammez.stride.mcp.ToolFixtures.LAST_NIGHT;
 import static com.hammez.stride.mcp.ToolFixtures.LAST_SEVEN_DAYS;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_FROM_THE_CAPTURE;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_NOW;
 import static com.hammez.stride.mcp.ToolFixtures.LOG_FILE;
 import static com.hammez.stride.mcp.ToolFixtures.NOW;
 import static com.hammez.stride.mcp.ToolFixtures.PERSONAL;
 import static com.hammez.stride.mcp.ToolFixtures.SLEEP;
+import static com.hammez.stride.mcp.ToolFixtures.SLEEP_RANGE_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
 import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
+import static com.hammez.stride.mcp.ToolFixtures.STEPS_RANGE;
 import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE;
@@ -68,7 +74,7 @@ import tools.jackson.databind.json.JsonMapper;
  * The tools, called through Spring AI's own tool callbacks (as the server calls them), on a real GarminClient and
  * cache talking to a fake Garmin, with replies from the fixtures. As in DataCommandsTest, the profile's time zone
  * is Europe/London, where it is already Sat 24 October (00:30), while in UTC it is still the 23rd. So "today" is
- * the 24th.
+ * the 24th. The daily log's tests run on the evening of its capture instead ({@link #onTheEveningOfTheCapture()}).
  * <p>
  * What the server adds on top (the SDK checking inputs against the schema, the JSON-RPC around it) is in
  * ServeModeTest.
@@ -82,7 +88,7 @@ class GarminToolsTest {
 
     private final FakeGarmin garmin = new FakeGarmin();
     private final JsonMapper json = JsonMapper.builder().build();
-    private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+    private Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     private final List<String> replies = new ArrayList<>();
     private final Logger toolsLog = (Logger) LoggerFactory.getLogger(GarminTools.class);
     private final ListAppender<ILoggingEvent> logged = new ListAppender<>();
@@ -111,15 +117,16 @@ class GarminToolsTest {
     // What the AI sees in tools/list
 
     @Test
-    void fiveReadOnlyToolsWithThePlansDescriptions() {
+    void sixReadOnlyToolsWithThePlansDescriptions() {
         assertThat(tools()).extracting(spec -> spec.tool().name())
                 .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep",
-                        "get_weight");
+                        "get_weight", "get_daily_log");
         assertThat(tool("get_activities").description()).isEqualTo(GarminTools.GET_ACTIVITIES);
         assertThat(tool("get_activity").description()).isEqualTo(GarminTools.GET_ACTIVITY);
         assertThat(tool("get_daily_summary").description()).isEqualTo(GarminTools.GET_DAILY_SUMMARY);
         assertThat(tool("get_sleep").description()).isEqualTo(GarminTools.GET_SLEEP);
         assertThat(tool("get_weight").description()).isEqualTo(GarminTools.GET_WEIGHT);
+        assertThat(tool("get_daily_log").description()).isEqualTo(GarminTools.GET_DAILY_LOG);
 
         for (SyncToolSpecification spec : tools()) {
             Tool tool = spec.tool();
@@ -157,6 +164,50 @@ class GarminToolsTest {
     }
 
     @Test
+    void theDailyLogsDescriptionMatchesTheRulesAndTheCache() {
+        // Built from GarminDataConfig: check the joins read right.
+        assertThat(GarminTools.GET_DAILY_LOG).endsWith("`from` and `to` are dates like 2026-11-08, both included, "
+                + "in the owner's time zone, covering at most 28 days and none after today. For more, call again "
+                + "for each 28 days. Leave both out for yesterday. Only `from`: from there to yesterday, or just "
+                + "today if `from` is today. Only `to`: that one day. A range ending before yesterday is cached for "
+                + "up to a day, or an hour if Garmin had nothing. The reply also gives today's date in the owner's "
+                + "time zone.");
+        // "Yesterday" and "that one day" are one day.
+        assertThat(GarminDataConfig.DEFAULT_LOG_RANGE_DAYS).isEqualTo(1);
+        // What it says the AI must know.
+        assertThat(GarminTools.GET_DAILY_LOG).contains(
+                "caloriesEaten is the food logged that day in kcal (MyFitnessPal's daily total, as synced to "
+                        + "Garmin). It is never calories burned.",
+                "final: false means the day may still change",
+                "so don't log it yet",
+                "the night that ended on the morning of that date",
+                "group is Garmin's top-level type",
+                "minutes (the whole duration, not the moving time)",
+                // The JSON's own names: sleep.hours, weight.kg and weight.time (LogReply).
+                "score (0 to 100) and hours (time asleep)",
+                "weight: kg (the day's first weight)",
+                "time (local, like 07:37) of the weigh-in that gave the weight, or of the scale reading if no "
+                        + "weigh-in had a weight");
+        // Every field of a day is named, as the JSON has it.
+        for (Class<?> part : List.of(LogReply.Day.class, LogReply.Sleep.class, LogReply.Activity.class,
+                LogReply.Weight.class)) {
+            for (var field : part.getRecordComponents()) {
+                String name = field.getName().equals("isFinal") ? "final" : field.getName();
+                assertThat(GarminTools.GET_DAILY_LOG).as(part.getSimpleName()).containsPattern("\\b" + name + "\\b");
+            }
+        }
+        // "Up to a day, or an hour if Garmin had nothing": the steps, sleep and weigh-ins over a range ending
+        // before yesterday. The activity search, a day wider, can end yesterday, so then it's less.
+        var lifetimes = GarminDataConfig.defaults(garmin.config()).cacheLifetimes();
+        assertThat(lifetimes.olderRange()).isEqualTo(Duration.ofDays(1));
+        assertThat(lifetimes.olderActivities()).isEqualTo(Duration.ofDays(1));
+        assertThat(lifetimes.emptyOlderDay()).isEqualTo(Duration.ofHours(1));
+        // The examples in it are real types and groups in Garmin's list.
+        assertThat(GarminTools.GET_DAILY_LOG).contains("running for running, trail_running and treadmill_running, "
+                + "cycling for indoor_cycling, fitness_equipment for strength_training");
+    }
+
+    @Test
     void theInputsTheAiSees() {
         assertThat(tool("get_activities").inputSchema().get("properties")).asInstanceOf(
                 InstanceOfAssertFactories.MAP).containsOnlyKeys("from", "to", "type", "refresh");
@@ -168,6 +219,12 @@ class GarminToolsTest {
         assertThat(property(tool("get_weight"), "from")).containsEntry("type", "string");
         assertThat(property(tool("get_weight"), "to")).containsEntry("type", "string");
         assertThat(tool("get_weight").inputSchema().get("required")).isEqualTo(List.of());
+
+        assertThat(tool("get_daily_log").inputSchema().get("properties")).asInstanceOf(
+                InstanceOfAssertFactories.MAP).containsOnlyKeys("from", "to", "refresh");
+        assertThat(property(tool("get_daily_log"), "from")).containsEntry("type", "string");
+        assertThat(property(tool("get_daily_log"), "to")).containsEntry("type", "string");
+        assertThat(tool("get_daily_log").inputSchema().get("required")).isEqualTo(List.of());
 
         assertThat(property(tool("get_activity"), "id")).containsEntry("type", "integer");
         assertThat(tool("get_activity").inputSchema().get("required")).isEqualTo(List.of("id"));
@@ -614,6 +671,178 @@ class GarminToolsTest {
         assertThat(log()).doesNotContain("blocked");
     }
 
+    // get_daily_log
+
+    @Test
+    void dailyLogFromTheRealReplies() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, Map.of("startDate", "2026-10-24", "endDate", "2026-11-20"), 200,
+                        Fixtures.read("summary-range.json"))
+                .respond(SLEEP_RANGE_PATH + "2026-10-24/2026-11-20", 200, Fixtures.read("sleep-range.json"))
+                .respond(WEIGHT_RANGE_PATH + "2026-10-24/2026-11-20", Map.of("includeAll", "true"), 200,
+                        Fixtures.read("weight-range.json"))
+                // A day wider at each end, for an activity recorded abroad.
+                .respond(ACTIVITIES, Map.of("startDate", "2026-10-23", "endDate", "2026-11-21", "start", "0",
+                        "limit", "20"), 200, LOG_ACTIVITIES)
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"));
+
+        String reply = ok("get_daily_log", Map.of("from", "2026-10-24", "to", "2026-11-20"));
+
+        assertThat(reply).isEqualTo(compact(LOG_FROM_THE_CAPTURE));
+        // About five requests for 28 days: one of each kind.
+        for (String path : List.of(STEPS_RANGE, SLEEP_RANGE_PATH + "2026-10-24/2026-11-20",
+                WEIGHT_RANGE_PATH + "2026-10-24/2026-11-20", ACTIVITIES, ACTIVITY_TYPES)) {
+            assertThat(garmin.requests(path)).as(path).hasSize(1);
+        }
+        assertThat(log()).isEqualTo("INFO get_daily_log worked in N ms");
+    }
+
+    @Test
+    void dailyLogLeavesOutWhatGarminDoesntHave() {
+        // Made up: a sleep score with no time asleep, calories eaten of 0 (nothing logged), an activity whose type
+        // isn't in Garmin's list and has no duration, and a weigh-in with body fat but no weight.
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, 200, """
+                        {"data":[{"calendarDate":"2026-11-12","movement":{"steps":{"value":14239}},
+                         "calories":{"consumedValue":0}}]}""")
+                .respond(SLEEP_RANGE_PATH + "2026-11-12/2026-11-12", 200, """
+                        {"individualStats":[{"calendarDate":"2026-11-12",
+                         "values":{"sleepScore":50,"gmtSleepStartTimeInMillis":1794447708000}}]}""")
+                .respond(WEIGHT_RANGE_PATH + "2026-11-12/2026-11-12", 200, """
+                        {"dailyWeightSummaries":[{"summaryDate":"2026-11-12","allWeightMetrics":[
+                         {"bodyFat":18.04,"timestampGMT":1794467400000}]}]}""")
+                .respond(ACTIVITIES, 200, """
+                        [{"activityId":7,"activityName":"Something new","activityType":{"typeKey":"new_sport_2030"},
+                          "startTimeLocal":"2026-11-12 18:00:00","startTimeGMT":"2026-11-12 18:00:00"}]""")
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"))
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"));
+
+        String reply = ok("get_daily_log", Map.of("to", "2026-11-12"));
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-11-12","to":"2026-11-12","days":[
+                 {"date":"2026-11-12","final":true,"sleep":{"score":50},"steps":14239,
+                  "activities":[{"id":7,"name":"Something new","type":"new_sport_2030"}],
+                  "weight":{"bodyFatPercent":18.0,"time":"07:10","weighIns":1}}]}"""));
+    }
+
+    @Test
+    void dailyLogDefaultsToYesterdayAndADayWithNothingIsOnlyItsDateAndFinal() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-19", "2026-11-19");
+
+        String reply = ok("get_daily_log", Map.of());
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-11-19","to":"2026-11-19",
+                 "days":[{"date":"2026-11-19","final":true}]}"""));
+        assertThat(garmin.requests(STEPS_RANGE).getFirst().queryParams())
+                .isEqualTo(Map.of("startDate", "2026-11-19", "endDate", "2026-11-19"));
+        // No activities, so their types aren't needed.
+        assertThat(garmin.requests(ACTIVITY_TYPES)).isEmpty();
+    }
+
+    @Test
+    void dailyLogWithOnlyToIsThatOneDayAndOnlyFromGoesToYesterday() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-12", "2026-11-12");
+        nothingFor("2026-11-08", "2026-11-19");
+
+        assertThat(json.readTree(ok("get_daily_log", Map.of("to", "2026-11-12"))).path("from").asString())
+                .isEqualTo("2026-11-12");
+        assertThat(json.readTree(ok("get_daily_log", Map.of("from", "2026-11-08"))).path("to").asString())
+                .isEqualTo("2026-11-19");
+        assertThat(garmin.requests(SLEEP_RANGE_PATH + "2026-11-12/2026-11-12")).hasSize(1);
+        assertThat(garmin.requests(SLEEP_RANGE_PATH + "2026-11-08/2026-11-19")).hasSize(1);
+    }
+
+    @Test
+    void dailyLogWithOnlyFromTodayIsJustTodayAndNotFinal() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-20", "2026-11-20");
+
+        String reply = ok("get_daily_log", Map.of("from", "2026-11-20"));
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-11-20","to":"2026-11-20",
+                 "days":[{"date":"2026-11-20","final":false}]}"""));
+    }
+
+    @Test
+    void dailyLogsBadRangesAreRefusedWithNothingSent() {
+        assertThat(error("get_daily_log", Map.of("from", "2026-11-20", "to", "2026-11-19")))
+                .isEqualTo("`from` (2026-11-20) is after `to` (2026-11-19). Put the earlier date first.");
+        // 29 days.
+        assertThat(error("get_daily_log", Map.of("from", "2026-10-23", "to", "2026-11-20")))
+                .isEqualTo("The range can be at most 28 days. 2026-10-23 to 2026-11-20 is 29 days, both included.");
+        for (String date : List.of("2026-13-01", "2026-02-30", "23-10-2026", "yesterday", "2026-10-2")) {
+            assertThat(error("get_daily_log", Map.of("from", date)))
+                    .isEqualTo("`from` isn't a date. Dates look like 2026-10-22.");
+            assertThat(error("get_daily_log", Map.of("from", "2026-11-01", "to", date)))
+                    .isEqualTo("`to` isn't a date. Dates look like 2026-10-22.");
+        }
+        assertThat(error("get_daily_log", Map.of("date", "2026-11-19")))
+                .isEqualTo("Unknown input `date`. get_daily_log takes from, to, refresh.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void dailyLogsDaysAfterTodayOrTooLongAgoWithNoToNeedOnlyTheProfile() {
+        // Today comes from the profile's time zone, so that is asked for (once), but nothing else.
+        onTheEveningOfTheCapture();
+        signedIn();
+
+        assertThat(error("get_daily_log", Map.of("from", "2026-11-21")))
+                .isEqualTo("`from` (2026-11-21) is after today (2026-11-20). Garmin has nothing for it yet.");
+        assertThat(error("get_daily_log", Map.of("to", "2026-11-21")))
+                .isEqualTo("`to` (2026-11-21) is after today (2026-11-20). Garmin has nothing for it yet.");
+        assertThat(error("get_daily_log", Map.of("from", "2026-11-14", "to", "2026-11-21")))
+                .isEqualTo("`to` (2026-11-21) is after today (2026-11-20). Garmin has nothing for it yet.");
+        // From there to yesterday is 29 days.
+        assertThat(error("get_daily_log", Map.of("from", "2026-10-22")))
+                .isEqualTo("The range can be at most 28 days. 2026-10-22 to 2026-11-19 is 29 days, both included.");
+
+        assertThat(garmin.requests()).extracting(FakeGarmin.Request::path)
+                .containsOnly(PROFILE_PATH, ToolFixtures.PERSONAL);
+    }
+
+    @Test
+    void dailyLogRateLimitedOnceWithNoRetry() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, 429, "");
+
+        assertThat(error("get_daily_log", Map.of("from", "2026-10-24", "to", "2026-11-20")))
+                .isEqualTo("Garmin is rate limiting. Wait a while (an hour or more) before trying again.");
+        assertThat(garmin.requests(STEPS_RANGE)).hasSize(1);
+        assertThat(garmin.requests()).extracting(FakeGarmin.Request::path)
+                .containsOnly(PROFILE_PATH, ToolFixtures.PERSONAL, STEPS_RANGE);
+        assertThat(log()).isEqualTo("WARN get_daily_log failed in N ms: Garmin is rate limiting. Wait a while "
+                + "(an hour or more) before trying again.");
+    }
+
+    @Test
+    void dailyLogRefreshAsksGarminAgain() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-19", "2026-11-19");
+        nothingFor("2026-11-19", "2026-11-19");
+
+        ok("get_daily_log", Map.of());
+        ok("get_daily_log", Map.of("refresh", true));
+        ok("get_daily_log", Map.of("refresh", false));
+
+        for (String path : List.of(STEPS_RANGE, SLEEP_RANGE_PATH + "2026-11-19/2026-11-19",
+                WEIGHT_RANGE_PATH + "2026-11-19/2026-11-19", ACTIVITIES)) {
+            assertThat(garmin.requests(path)).as(path).hasSize(2);
+        }
+    }
+
     // refresh
 
     @Test
@@ -961,6 +1190,22 @@ class GarminToolsTest {
     @SuppressWarnings("unchecked")
     private static Map<String, Object> property(Tool tool, String name) {
         return (Map<String, Object>) ((Map<String, Object>) tool.inputSchema().get("properties")).get(name);
+    }
+
+    /**
+     * The evening of the daily log's capture ({@link ToolFixtures#LOG_NOW}): today is 20 November. Call before
+     * anything else.
+     */
+    private void onTheEveningOfTheCapture() {
+        clock = Clock.fixed(LOG_NOW, ZoneOffset.UTC);
+    }
+
+    /** Queues a daily log from {@code from} to {@code to} with nothing in it: no steps, sleep, weigh-ins or activities. */
+    private void nothingFor(String from, String to) {
+        garmin.respond(STEPS_RANGE, 200, "{\"data\":[]}")
+                .respond(SLEEP_RANGE_PATH + from + "/" + to, 200, "{\"individualStats\":[]}")
+                .respond(WEIGHT_RANGE_PATH + from + "/" + to, 200, "{\"dailyWeightSummaries\":[]}")
+                .respond(ACTIVITIES, 200, "[]");
     }
 
     /** Queues the profile and its time zone (Europe/London) once. The cache keeps them after that. */

@@ -46,6 +46,19 @@ public final class Units {
         return value == null || value <= 0 ? null : value;
     }
 
+    /**
+     * Hours as a number, to 1 decimal place: 23,580 seconds is 6.6. For the daily log, as the health log has them.
+     * Worked out in tenths of an hour, so a value exactly halfway rounds up, as it does on paper.
+     */
+    public static Double decimalHours(Integer seconds) {
+        return seconds == null ? null : Math.round(seconds / 360.0) / 10.0;
+    }
+
+    /** Minutes as a number, to 1 decimal place: 4,203 seconds (1:10:03) is 70.1. For the daily log. */
+    public static Double decimalMinutes(Double seconds) {
+        return seconds == null ? null : Math.round(seconds / 6.0) / 10.0;
+    }
+
     /** Rounded to 1 decimal place, such as a weight in kg. */
     public static Double oneDecimal(Double value) {
         return value == null ? null : Math.round(value * 10) / 10.0;

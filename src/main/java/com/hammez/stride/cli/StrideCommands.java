@@ -28,6 +28,7 @@ import com.hammez.stride.garmin.GarminDataConfig;
 import com.hammez.stride.garmin.GarminSamples;
 import com.hammez.stride.garmin.GarminSamples.Capture;
 import com.hammez.stride.garmin.GarminSamples.Saved;
+import com.hammez.stride.garmin.LogRange;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.UnexpectedReplyException;
 import com.hammez.stride.garmin.WeighIn;
@@ -39,7 +40,8 @@ import com.hammez.stride.garmin.auth.NotFoundException;
 
 /**
  * The commands: {@code login}, {@code whoami}, {@code logout}, the data commands ({@code activities},
- * {@code activity}, {@code summary}, {@code sleep}, {@code weight}) and {@code capture}. Runs one command and sets the exit code:
+ * {@code activity}, {@code summary}, {@code sleep}, {@code weight}, {@code log}) and
+ * {@code capture}. Runs one command and sets the exit code:
  * 0 for success, 1 for a failure, 2 for a usage error.
  * <p>
  * The data commands go through {@link GarminClient}, so the cache answers when it can. After one, a reason the
@@ -64,20 +66,25 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
               weight [from] [to]
                                 Weight and body composition for each day with a weigh-in, and the change.
                                 Default the last %d days. With only from, up to today. At most %d days.
+              log [from] [to]   Each day's sleep, steps, calories eaten, activities and weight, for a health log.
+                                Default yesterday. With only from, up to yesterday (or just today if from is
+                                today). At most %d days, and none after today.
               capture <folder>  Save Garmin's raw replies (about 17 requests, once each) to files in a new
                                 folder, for building test fixtures. The files hold personal data.
               serve             Start the MCP server, over stdin and stdout. An AI app runs this, not you.
 
             Dates look like 2026-10-22. "Today" is today in your Garmin profile's time zone.
-            --no-cache            With activities, activity, summary, sleep or weight: ask Garmin even if the
-                                  cache has a fresh copy. The new reply is still cached.
+            --no-cache            With activities, activity, summary, sleep, weight or log: ask Garmin even if
+                                  the cache has a fresh copy. The new reply is still cached.
             """.formatted(GarminDataConfig.DEFAULT_RANGE_DAYS, GarminDataConfig.MAX_RANGE_DAYS,
-                    GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+                    GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS,
+                    GarminDataConfig.MAX_LOG_RANGE_DAYS);
 
     public static final String SERVE_ARGUMENTS =
             "serve takes no arguments or options, only Spring settings such as --stride.token-file=…";
 
-    private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep", "weight");
+    private static final Set<String> DATA_COMMANDS = Set.of("activities", "activity", "summary", "sleep", "weight",
+            "log");
 
     static final String CHECKLIST = "the checklist in docs/phases/phase-2-data.md (\"Getting real samples\")";
 
@@ -152,7 +159,7 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             command.run();
             return 0;
         } catch (UsageException e) {
-            // A range that could only be checked once today was known (weight). Nothing else was asked for.
+            // A range that could only be checked once today was known (weight, log). Nothing else was asked for.
             io.err().println(e.getMessage());
             return 2;
         } catch (GarminException e) {
@@ -179,7 +186,8 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
             throw new UsageException(null, true);
         }
         if (line.noCache() && !DATA_COMMANDS.contains(name)) {
-            throw new UsageException("--no-cache only works with activities, activity, summary, sleep and weight.", true);
+            throw new UsageException("--no-cache only works with activities, activity, summary, sleep, weight and "
+                    + "log.", true);
         }
         if ((line.days() != null || line.type() != null) && !name.equals("activities")) {
             throw new UsageException("--days and --type only work with activities.", true);
@@ -226,6 +234,15 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
                     weightRange(from, to);
                 }
                 yield () -> weight(data, from, to);
+            }
+            case "log" -> {
+                arguments(line, 0, 2);
+                LocalDate from = date(line, 0);
+                LocalDate to = date(line, 1);
+                if (from != null && to != null) {
+                    logRange(from, to);
+                }
+                yield () -> log(data, from, to);
             }
             case "capture" -> {
                 arguments(line, 1, 1);
@@ -283,13 +300,22 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
 
     /** Refuses a range {@code weight} can't ask for: backwards, or longer than the limit. */
     private static void weightRange(LocalDate from, LocalDate to) {
+        range("weight", from, to, GarminDataConfig.MAX_WEIGHT_RANGE_DAYS);
+    }
+
+    /** Refuses a range {@code log} can't ask for: backwards, or longer than the limit. */
+    private static void logRange(LocalDate from, LocalDate to) {
+        range("log", from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
+    }
+
+    private static void range(String command, LocalDate from, LocalDate to, int maxDays) {
         if (from.isAfter(to)) {
             throw new UsageException(from + " is after " + to + ". Put the earlier date first.", false);
         }
         long days = ChronoUnit.DAYS.between(from, to) + 1;
-        if (days > GarminDataConfig.MAX_WEIGHT_RANGE_DAYS) {
-            throw new UsageException("weight covers at most " + GarminDataConfig.MAX_WEIGHT_RANGE_DAYS + " days. "
-                    + from + " to " + to + " is " + days + " days, both included.", false);
+        if (days > maxDays) {
+            throw new UsageException(command + " covers at most " + maxDays + " days. " + from + " to " + to
+                    + " is " + days + " days, both included.", false);
         }
     }
 
@@ -354,6 +380,25 @@ public class StrideCommands implements ApplicationRunner, ExitCodeGenerator {
         weightRange(from, to);
         WeightHistory history = WeightHistory.of(data.weighIns(from, to));
         new DataPrinter(io.out()).weight(history, from, to, data.zone());
+    }
+
+    /**
+     * The daily log from {@code from} to {@code to}, worked out by {@link LogRange} as {@code get_daily_log} does:
+     * no dates means yesterday, and only {@code from} from there to yesterday, or just today if {@code from} is
+     * today. No day after today. (Only {@code to} can't be given here.) A range that needs today to check is
+     * checked here, before anything else is asked for.
+     */
+    private void log(GarminClient data, LocalDate from, LocalDate to) {
+        LocalDate today = data.today();
+        LogRange range;
+        try {
+            range = LogRange.of(from, to, today);
+        } catch (LogRange.AfterToday e) {
+            throw new UsageException(e.date() + " is after today (" + e.today() + "). Garmin has nothing for it "
+                    + "yet.", false);
+        }
+        logRange(range.from(), range.to());
+        new DataPrinter(io.out()).log(data.dailyLog(range.from(), range.to()), range.from(), range.to(), data.zone());
     }
 
     /** No date means last night: the night that ended this morning. */

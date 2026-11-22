@@ -2,7 +2,7 @@
 
 **Done when:** I ask "fill in my health log for yesterday", and the AI gets every column Garmin can supply for that day from one tool call.
 
-_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Step 3 done 21 November 2026: the client (`GarminClient.dailyLog`). Next: step 4, the tool and the CLI._
+_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Step 3 done 21 November 2026: the client (`GarminClient.dailyLog`). Step 4 done 22 November 2026: the tool `get_daily_log` and `stride-mcp log`, with the owner's answers on the [range rules](#decisions-to-make). Step 5 done 22 November 2026: the docs. Next: step 6, the owner's live check._
 
 ## What the capture showed (20 November 2026)
 
@@ -85,10 +85,10 @@ So stride-mcp can already supply everything Garmin knows. What's missing is doin
 
 | Input | Meaning |
 |---|---|
-| `from`, `to` | Dates like 2026-11-08, both included. At most 28 days. Leave both out for yesterday. Only `from`: from there to yesterday. |
+| `from`, `to` | Dates like 2026-11-08, both included. At most 28 days, and none after today. Leave both out for yesterday. Only `from`: from there to yesterday, or just today if `from` is today. Only `to`: that one day. |
 | `refresh` | As in the other tools |
 
-One entry per day, oldest first, with what Garmin has for it:
+The reply has `today`, `timeZone`, `from` and `to`, as `get_weight` does, then `days`: one entry per day, oldest first, with what Garmin has for it:
 
 ```json
 {
@@ -155,6 +155,9 @@ The 28-day limit is Garmin's on the sleep call (python-garminconnect, checked 20
 | Today | **Allowed, with `final: false`** | So "how am I doing today?" works, and the AI knows not to log it yet |
 | Range replies, or one day at a time? | ✅ **The range replies** (settled by the capture, 21 November 2026) | Both have every day and match the one-day replies. About five requests for 28 days, not 85. See [Garmin](#garmin). |
 | Which type is a `group`? | ✅ **The top-level type below `all`** (from the capture, 21 November 2026) | Garmin's own tree. `running` is its own group, and `trail_running` and `treadmill_running` are in it. |
+| Only `to` given? | ✅ **That one day** (the owner's choice, 22 November 2026) | The same rule as the other tools: the default length ending at `to`. Here the default is 1 day (`GarminDataConfig.DEFAULT_LOG_RANGE_DAYS`). |
+| Only `from`, and it's today? | ✅ **Just today, with `final: false`** (the owner's choice, 22 November 2026) | "From there to yesterday" would run backwards. So `to` is yesterday, or `from` if that's later. |
+| Dates after today? | ✅ **Refused, `from` and `to` alike** (the owner's choice, 22 November 2026) | Nothing to log there, and no requests wasted. Checked once today is known, so only the profile lookup is sent. |
 | Garmin's calories eaten (`calories.consumedValue`)? | ✅ **Add it, as `caloriesEaten`** (the owner's choice, 21 November 2026; proposed: leave it out) | It's in the steps reply already, so it costs nothing. The name keeps it apart from calories burned. On 21 November 2026 it matched the sheet's Calories column (from MyFitnessPal) on all 12 days that have both, to within 1 kcal. So [4c](phase-4c-catch-up.md) fills that column from it, blank cells only (the owner's choice, 21 November 2026). |
 
 ## Steps
@@ -167,8 +170,17 @@ The 28-day limit is Garmin's on the sleep call (python-garminconnect, checked 20
    - `dailyLog(from, to)` puts them together with the weigh-ins and the activity search: a `LogDay` for every day, oldest first, with `isFinal` false for today. An activity's day is the day it started in the owner's time zone. The search covers a day either side, so an activity recorded abroad isn't missed at either end. A day's activities are oldest first. Any request failing fails the whole call.
    - At most `GarminDataConfig.MAX_LOG_RANGE_DAYS` (28) days, checked before anything is sent, not even the profile lookup. `capture` uses the same constant.
    - Cached like the weigh-ins over a range: 15 minutes if the range includes today or yesterday, otherwise a day, or an hour if it had nothing. That lifetime is now `CacheLifetimes.olderRange`, as it's not only for weight any more.
-4. **Tool and CLI:** `get_daily_log`, its reply and description, and `stride-mcp log`. Tests as for the other tools, including over stdio.
-5. **Docs:** the quick start, the tool table, AGENTS.md status.
+4. **Tool and CLI:** `get_daily_log`, its reply and description, and `stride-mcp log`. Tests as for the other tools, including over stdio. ✅ Done 22 November 2026:
+   - `get_daily_log` in `mcp/GarminTools`, through `GarminTools.call`, with its reply `mcp/LogReply` built in `ToolReplies.log`. Bad dates, a backwards range and more than 28 days are refused before anything is sent. A day after today, or a range that only turns out too long once today is known, sends only the profile lookup.
+   - The description tells the AI that `caloriesEaten` is food logged (MyFitnessPal's total), never calories burned, that `final: false` means don't log it yet, which night `sleep` is, what `group` is, and what each input means. A test checks it against the constants and the cache lifetimes.
+   - Hours and minutes to 1 decimal place come from `Units.decimalHours` and `Units.decimalMinutes`, shared with the CLI. They round in tenths, so 6.55 hours is 6.6, as the log has it.
+   - A part Garmin doesn't have is left out: a night with no score or time asleep, a day with no activities, and inside `weight` a value the weigh-in didn't have. A day with nothing is `{"date": …, "final": true}`.
+   - `weight` is `kg`, `bodyFatPercent`, `muscleMassKg`, `time` and `weighIns`, as planned. It doesn't say when the body composition came from another weigh-in (`get_weight` does).
+   - `stride-mcp log [from] [to]`, printed by `DataPrinter.log`: a table of the days, a * on a day that isn't final, then a table of the activities. It works with `--no-cache`. Only `to` can't be given on the command line, as the dates go in order.
+   - `GarminDataConfig.DEFAULT_LOG_RANGE_DAYS` (1): the default range, ending yesterday, or at `to`.
+   - The range rules are in one place, `garmin/LogRange`, so `stride-mcp log` always matches the tool (after review, 22 November 2026). Each turns a day after today into its own error.
+   - Tests: the real fixtures (28 days, with today a part day, days with nothing, 12 November without `caloriesEaten`, 14 November with two weigh-ins), the defaults, the range rules, 429 once, `refresh`, the inputs the AI sees, a `tools/call` over stdio, and the CLI's output and `--no-cache`.
+5. **Docs:** the quick start, the tool table, AGENTS.md status. ✅ Done 22 November 2026: the quick start's command, tool and cache tables, and a "Daily log" example (from the real fixtures, with made-up activities). `DataCommandsTest.logAsTheQuickStartShowsIt` pins the same output, so the two can't drift apart.
 6. **Live check** (owner): "what did Garmin record for the last week?" in Codex, which I'll use every day, then in Claude Code. Compare with the Garmin Connect app.
 
 ## Not in this plan

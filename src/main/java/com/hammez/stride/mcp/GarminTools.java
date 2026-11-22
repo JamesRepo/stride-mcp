@@ -18,6 +18,7 @@ import org.springframework.ai.mcp.annotation.McpToolParam;
 import com.hammez.stride.garmin.ActivityDetails;
 import com.hammez.stride.garmin.GarminClient;
 import com.hammez.stride.garmin.GarminDataConfig;
+import com.hammez.stride.garmin.LogRange;
 import com.hammez.stride.garmin.UnexpectedReplyException;
 import com.hammez.stride.garmin.WeighIn;
 import com.hammez.stride.garmin.WeightHistory;
@@ -29,7 +30,7 @@ import io.modelcontextprotocol.spec.McpSchema.CallToolRequest;
 import io.modelcontextprotocol.spec.McpSchema.CallToolResult;
 
 /**
- * The five MCP tools, found by Spring AI's annotation scanner (serve mode only, see {@link McpBeans}). Each checks
+ * The six MCP tools, found by Spring AI's annotation scanner (serve mode only, see {@link McpBeans}). Each checks
  * its input first, so a bad one never reaches Garmin, then asks {@link GarminClient} and returns
  * {@link ToolReplies}' JSON as text. All read-only.
  * <p>
@@ -47,8 +48,8 @@ class GarminTools {
     private static final Logger log = LoggerFactory.getLogger(GarminTools.class);
 
     // The numbers come from GarminDataConfig, so the descriptions can't drift from the checks. GarminToolsTest
-    // checks that the example range is MAX_RANGE_DAYS long, and that REFRESH and GET_WEIGHT match the cache
-    // lifetimes.
+    // checks that the example range is MAX_RANGE_DAYS long, and that REFRESH, GET_WEIGHT and GET_DAILY_LOG match the
+    // cache lifetimes.
     static final String GET_ACTIVITIES = """
             Lists the owner's Garmin Connect activities (runs, rides, strength sessions, walks and others) that \
             started between two dates, newest first. For each: id, name, type, local start time, distance in km, \
@@ -98,6 +99,30 @@ class GarminTools {
             + "out for the last " + GarminDataConfig.DEFAULT_WEIGHT_RANGE_DAYS + " days, today included. A range "
             + "ending before yesterday is cached for a day, or an hour if it had no weigh-ins. The reply also gives "
             + "today's date in the owner's time zone.";
+
+    // "Yesterday" and "that one day" are DEFAULT_LOG_RANGE_DAYS (1): GarminToolsTest checks it.
+    static final String GET_DAILY_LOG = """
+            Everything Garmin has for each day of the owner's daily health log, one entry per day, oldest first. \
+            Use it to fill in or catch up a log, such as "fill in my health log for yesterday", or for "what did \
+            Garmin record last week?". For each day: date; final; sleep: the night that ended on the morning of \
+            that date (2026-11-12's sleep is the night of 11 to 12 November), with its score (0 to 100) and hours \
+            (time asleep); steps; caloriesEaten; activities: each one that started that day in the owner's time zone, \
+            oldest first, with id, name, type (Garmin's type key, such as treadmill_running), group and minutes \
+            (the whole duration, not the moving time); and weight: kg (the day's first weight), bodyFatPercent \
+            (18.5 means 18.5%) and muscleMassKg from the day's first scale reading, time (local, like 07:37) of the \
+            weigh-in that gave the weight, or of the scale reading if no weigh-in had a weight, and weighIns (how \
+            many that day). caloriesEaten is the food logged that \
+            day in kcal (MyFitnessPal's daily total, as synced to Garmin). It is never calories burned. group is \
+            Garmin's top-level type: running for running, trail_running and treadmill_running, cycling for \
+            indoor_cycling, fitness_equipment for strength_training. Parts Garmin doesn't have are left out, so a \
+            day with nothing is only its date and final. final: false means the day may still change (today: the \
+            watch and scale may still sync), so don't log it yet. `from` and `to` are dates like 2026-11-08, both \
+            included, in the owner's time zone, covering at most \
+            """ + GarminDataConfig.MAX_LOG_RANGE_DAYS + " days and none after today. For more, call again for each "
+            + GarminDataConfig.MAX_LOG_RANGE_DAYS + " days. Leave both out for yesterday. Only `from`: from there "
+            + "to yesterday, or just today if `from` is today. Only `to`: that one day. A range ending before "
+            + "yesterday is cached for up to a day, or an hour if Garmin had nothing. The reply also gives today's "
+            + "date in the owner's time zone.";
 
     static final String REFRESH = "Only set this when the owner says data is missing or they just synced their "
             + "watch, or an activity looks unfinished (Garmin was still processing it). Replies are cached: today's "
@@ -233,6 +258,29 @@ class GarminTools {
         });
     }
 
+    @McpTool(name = "get_daily_log", description = GET_DAILY_LOG,
+            annotations = @McpAnnotations(readOnlyHint = true, destructiveHint = false))
+    CallToolResult getDailyLog(
+            @McpToolParam(required = false, description = "First day, like 2026-11-08, in the owner's time zone. "
+                    + "Leave out from and to for yesterday.") String from,
+            @McpToolParam(required = false, description = "Last day, like 2026-11-14, included. No later than "
+                    + "today.") String to,
+            @McpToolParam(required = false, description = REFRESH) Boolean refresh,
+            CallToolRequest request) {
+        return call("get_daily_log", request, List.of("from", "to", "refresh"), () -> {
+            LocalDate first = date("from", from);
+            LocalDate last = date("to", to);
+            if (first != null && last != null) {
+                checkRange(first, last, GarminDataConfig.MAX_LOG_RANGE_DAYS);
+            }
+            GarminClient client = client(refresh);
+            LocalDate today = client.today();
+            Range range = logRange(first, last, today);
+            return replies.log(client.dailyLog(range.from(), range.to()), range.from(), range.to(), today,
+                    client.zone());
+        });
+    }
+
     /**
      * Runs one tool call: refuses inputs the tool doesn't take, then does the work and returns its reply as JSON
      * text. Any error becomes an error result with our message. Logs one line.
@@ -333,6 +381,24 @@ class GarminTools {
         }
         checkRange(from, to, maxDays);
         return new Range(from, to);
+    }
+
+    /**
+     * The daily log's range, from the inputs, as {@link LogRange} works it out, then checked against the limit.
+     *
+     * @param from null if left out
+     * @param to   null if left out
+     */
+    private static Range logRange(LocalDate from, LocalDate to, LocalDate today) {
+        LogRange range;
+        try {
+            range = LogRange.of(from, to, today);
+        } catch (LogRange.AfterToday e) {
+            throw new BadInput("`" + e.input() + "` (" + e.date() + ") is after today (" + e.today() + "). Garmin "
+                    + "has nothing for it yet.");
+        }
+        checkRange(range.from(), range.to(), GarminDataConfig.MAX_LOG_RANGE_DAYS);
+        return new Range(range.from(), range.to());
     }
 
     private static void checkRange(LocalDate from, LocalDate to, int maxDays) {

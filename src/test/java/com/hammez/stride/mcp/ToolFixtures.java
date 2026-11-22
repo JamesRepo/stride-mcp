@@ -115,6 +115,73 @@ public final class ToolFixtures {
               {"date":"2026-11-20","time":"08:35","weightKg":76.1,"bodyFatPercent":18.0,"bodyWaterPercent":55.3,
                "muscleMassKg":33.0,"boneMassKg":3.2,"bmi":23.5,"weighIns":1}]}""";
 
+    /**
+     * For the daily log (phase 4b): the evening of the capture, 20 November, 22:38 in London (GMT by then). Its
+     * fixtures cover 24 October to 20 November, 28 days, the most allowed, with today, the 20th, a part day.
+     */
+    public static final Instant LOG_NOW = Instant.parse("2026-11-20T22:38:00Z");
+
+    public static final String STEPS_RANGE = "/usersummary-service/v2/dailysummaries";
+    public static final String SLEEP_RANGE_PATH = "/sleep-service/stats/sleep/daily/";
+    public static final String ACTIVITY_TYPES = "/activity-service/activity/activityTypes";
+
+    /**
+     * Made up, in the activity search's shape, newest first, as Garmin lists them: no capture has activities in the
+     * log fixtures' range. A run on 12 November, and a treadmill run and a strength session on the 19th (1:10:03,
+     * which the health log has as 70.1 minutes).
+     */
+    public static final String LOG_ACTIVITIES = """
+            [{"activityId":3,"activityName":"Strength","activityType":{"typeKey":"strength_training"},
+              "startTimeLocal":"2026-11-19 18:00:00","startTimeGMT":"2026-11-19 18:00:00","duration":4203.0,
+              "movingDuration":4100.0},
+             {"activityId":2,"activityName":"Treadmill","activityType":{"typeKey":"treadmill_running"},
+              "startTimeLocal":"2026-11-19 07:00:00","startTimeGMT":"2026-11-19 07:00:00","duration":1800.0},
+             {"activityId":1,"activityName":"London Running","activityType":{"typeKey":"running"},
+              "startTimeLocal":"2026-11-12 18:00:00","startTimeGMT":"2026-11-12 18:00:00","duration":2994.0}]""";
+
+    /**
+     * get_daily_log from 2026-10-24 to 2026-11-20 at {@link #LOG_NOW}: summary-range.json, sleep-range.json,
+     * weight-range.json, activity-types.json and {@link #LOG_ACTIVITIES}. The fixtures keep 5 of the 28 days of steps
+     * and sleep, so the others have nothing. 12 November has no calories eaten (nothing logged in MyFitnessPal), 14
+     * November two weights typed in (the first counts), and 20 November is today: not final.
+     */
+    public static final String LOG_FROM_THE_CAPTURE = """
+            {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-10-24","to":"2026-11-20","days":[
+              {"date":"2026-10-24","final":true,"sleep":{"score":75,"hours":7.3},"steps":9013,"caloriesEaten":3226},
+              {"date":"2026-10-25","final":true,"sleep":{"score":82,"hours":8.9},"steps":13768,"caloriesEaten":2556},
+              {"date":"2026-10-26","final":true},
+              {"date":"2026-10-27","final":true},
+              {"date":"2026-10-28","final":true},
+              {"date":"2026-10-29","final":true},
+              {"date":"2026-10-30","final":true},
+              {"date":"2026-10-31","final":true},
+              {"date":"2026-11-01","final":true},
+              {"date":"2026-11-02","final":true},
+              {"date":"2026-11-03","final":true},
+              {"date":"2026-11-04","final":true},
+              {"date":"2026-11-05","final":true},
+              {"date":"2026-11-06","final":true},
+              {"date":"2026-11-07","final":true},
+              {"date":"2026-11-08","final":true},
+              {"date":"2026-11-09","final":true},
+              {"date":"2026-11-10","final":true},
+              {"date":"2026-11-11","final":true},
+              {"date":"2026-11-12","final":true,"sleep":{"score":50,"hours":6.6},"steps":14239,
+               "activities":[{"id":1,"name":"London Running","type":"running","group":"running","minutes":49.9}]},
+              {"date":"2026-11-13","final":true},
+              {"date":"2026-11-14","final":true,"weight":{"kg":75.8,"time":"08:31","weighIns":2}},
+              {"date":"2026-11-15","final":true},
+              {"date":"2026-11-16","final":true},
+              {"date":"2026-11-17","final":true,
+               "weight":{"kg":76.0,"bodyFatPercent":18.0,"muscleMassKg":33.0,"time":"07:15","weighIns":1}},
+              {"date":"2026-11-18","final":true},
+              {"date":"2026-11-19","final":true,"sleep":{"score":49,"hours":7.7},"steps":6352,"caloriesEaten":2667,
+               "activities":[
+                {"id":2,"name":"Treadmill","type":"treadmill_running","group":"running","minutes":30.0},
+                {"id":3,"name":"Strength","type":"strength_training","group":"fitness_equipment","minutes":70.1}]},
+              {"date":"2026-11-20","final":false,"sleep":{"score":95,"hours":10.0},"steps":95,"caloriesEaten":2442,
+               "weight":{"kg":76.1,"bodyFatPercent":18.0,"muscleMassKg":33.0,"time":"08:35","weighIns":1}}]}""";
+
     /** Pretty JSON as one line, keeping its field order, to compare with a reply. */
     public static String compact(String pretty) {
         return JSON.writeValueAsString(JSON.readTree(pretty));

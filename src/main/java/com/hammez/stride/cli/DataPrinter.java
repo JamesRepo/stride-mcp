@@ -18,6 +18,7 @@ import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.DayWeight;
 import com.hammez.stride.garmin.Lap;
+import com.hammez.stride.garmin.LogDay;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.Units;
 import com.hammez.stride.garmin.WeighIn;
@@ -243,6 +244,68 @@ final class DataPrinter {
             out.println("Lowest " + weighed(history.lowest(), day) + ", highest " + weighed(history.highest(), day)
                     + ".");
         }
+    }
+
+    /**
+     * The daily log, the same as {@code get_daily_log} gives, for checking: a table with a row for every day
+     * (sleep, steps, calories eaten and weight), then a table of the days' activities, oldest first. A day that isn't
+     * final (today) is marked with a *. Hours and minutes to 1 decimal place, as the health log has them.
+     *
+     * @param log  every day from {@code from} to {@code to}, oldest first
+     * @param zone for the times of the weigh-ins: the Garmin profile's
+     */
+    void log(List<LogDay> log, LocalDate from, LocalDate to, ZoneId zone) {
+        DateTimeFormatter day = from.getYear() == to.getYear() ? DAY : DATE;
+        var rows = new ArrayList<List<String>>();
+        var activities = new ArrayList<List<String>>();
+        boolean marked = false;
+        for (LogDay d : log) {
+            Sleep night = d.sleep();
+            DayWeight weight = d.weight();
+            WeighIn w = weight == null ? null : weight.weight();
+            WeighIn b = weight == null ? null : weight.bodyComposition();
+            Instant time = weight == null ? null : weight.picked().time();
+            rows.add(List.of(
+                    day.format(d.date()) + (d.isFinal() ? "" : "*"),
+                    night == null ? NONE : orNone(night.score()),
+                    night == null || night.sleepSeconds() == null ? NONE
+                            : format("%.1f", Units.decimalHours(night.sleepSeconds())),
+                    d.steps() == null ? NONE : format("%,d", d.steps()),
+                    d.caloriesEaten() == null ? NONE : format("%,d kcal", d.caloriesEaten()),
+                    w == null ? NONE : kilograms(w.weightKilograms()),
+                    b == null || b.bodyFatPercent() == null ? NONE : format("%.1f%%", b.bodyFatPercent()),
+                    b == null || b.muscleMassKilograms() == null ? NONE : kilograms(b.muscleMassKilograms()),
+                    time == null ? NONE : CLOCK.format(time.atZone(zone)),
+                    weight == null ? NONE : String.valueOf(weight.weighIns())));
+            marked |= !d.isFinal();
+            for (LogDay.Activity a : d.activities()) {
+                ActivitySummary s = a.activity();
+                activities.add(List.of(
+                        day.format(d.date()),
+                        orNone(s.type()),
+                        orNone(a.group()),
+                        s.durationSeconds() == null ? NONE
+                                : format("%.1f", Units.decimalMinutes(s.durationSeconds())),
+                        orNone(s.name()),
+                        String.valueOf(s.id())));
+            }
+        }
+        table(List.of("Date", "Sleep", "Hours", "Steps", "Calories eaten", "Weight", "Body fat", "Muscle",
+                "Weighed", "Weigh-ins"), rows, Set.of(1, 2, 3, 4, 5, 6, 7));
+        if (marked) {
+            out.println("* Not final: Garmin may still add to it, so don't log it yet.");
+        }
+        out.println();
+        if (activities.isEmpty()) {
+            out.println("No activities.");
+        } else {
+            table(List.of("Date", "Type", "Group", "Minutes", "Name", "Id"), activities, Set.of(3));
+        }
+        out.println();
+        int count = log.size();
+        out.println(count + (count == 1 ? " day" : " days") + " from " + day.format(from) + " to " + day.format(to)
+                + ".");
+        out.println("Sleep is the night that ended that morning. Calories eaten are food logged, not burned.");
     }
 
     /** "75.7 kg (Fri 23 Oct)" */

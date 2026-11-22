@@ -2,18 +2,25 @@ package com.hammez.stride;
 
 import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY_TYPES;
 import static com.hammez.stride.mcp.ToolFixtures.ACTIVITY;
 import static com.hammez.stride.mcp.ToolFixtures.DAY_WITH_TWO_WEIGH_INS;
 import static com.hammez.stride.mcp.ToolFixtures.LAST_NIGHT;
 import static com.hammez.stride.mcp.ToolFixtures.LAST_SEVEN_DAYS;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_ACTIVITIES;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_FROM_THE_CAPTURE;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_NOW;
 import static com.hammez.stride.mcp.ToolFixtures.NOW;
 import static com.hammez.stride.mcp.ToolFixtures.PERSONAL;
 import static com.hammez.stride.mcp.ToolFixtures.SLEEP;
+import static com.hammez.stride.mcp.ToolFixtures.SLEEP_RANGE_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.SPLITS;
 import static com.hammez.stride.mcp.ToolFixtures.STAIR_STEPPER;
+import static com.hammez.stride.mcp.ToolFixtures.STEPS_RANGE;
 import static com.hammez.stride.mcp.ToolFixtures.SUMMARY;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE;
+import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_RANGE_PATH;
 import static com.hammez.stride.mcp.ToolFixtures.WEIGHT_SINCE_OCTOBER;
 import static com.hammez.stride.mcp.ToolFixtures.compact;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,6 +35,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Clock;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -103,11 +111,11 @@ class ServeModeTest {
         assertThat(result.path("capabilities").path("tools").path("listChanged").asBoolean()).isFalse();
 
         assertThat(toolsList.path("id").asInt()).isEqualTo(2);
-        // The five tools, read-only, each with a description (GarminToolsTest checks the wording).
+        // The six tools, read-only, each with a description (GarminToolsTest checks the wording).
         JsonNode tools = toolsList.path("result").path("tools");
         assertThat(tools.valueStream().map(tool -> tool.path("name").asString()))
                 .containsExactlyInAnyOrder("get_activities", "get_activity", "get_daily_summary", "get_sleep",
-                        "get_weight");
+                        "get_weight", "get_daily_log");
         for (JsonNode tool : tools) {
             assertThat(tool.path("description").asString()).as(tool.toString()).isNotBlank();
             assertThat(tool.path("annotations").path("readOnlyHint").asBoolean()).as(tool.toString()).isTrue();
@@ -205,7 +213,7 @@ class ServeModeTest {
         assertThat(garmin.requests(SLEEP)).singleElement().satisfies(request -> assertThat(
                 request.header("Authorization")).isEqualTo("Bearer " + FakeGarmin.ACCESS_TOKEN));
         assertThat(toolsList.path("id").asInt()).isEqualTo(2);
-        assertThat(toolsList.path("result").path("tools")).hasSize(5);
+        assertThat(toolsList.path("result").path("tools")).hasSize(6);
 
         assertOnlyJsonRpcOnStdout(server, 3);
         assertThat(server.stderr()).contains(FakeGarminServe.PRINTED);
@@ -268,6 +276,35 @@ class ServeModeTest {
         assertThat(garmin.requests(PROFILE_PATH)).hasSize(1);
         assertThat(garmin.requests(PERSONAL)).hasSize(1);
         assertOnlyJsonRpcOnStdout(server, 6);
+        assertNoTokens(server);
+    }
+
+    @Test
+    void theDailyLogOverStdioIsTheReplyGarminToolsTestPins() throws Exception {
+        garmin.respond(PROFILE_PATH, 200, Fixtures.read("social-profile.json"))
+                .respond(PERSONAL, 200, Fixtures.read("personal-information.json"))
+                .respond(STEPS_RANGE, 200, Fixtures.read("summary-range.json"))
+                .respond(SLEEP_RANGE_PATH + "2026-10-24/2026-11-20", 200, Fixtures.read("sleep-range.json"))
+                .respond(WEIGHT_RANGE_PATH + "2026-10-24/2026-11-20", 200, Fixtures.read("weight-range.json"))
+                .respond(ACTIVITIES, 200, LOG_ACTIVITIES)
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"));
+        var server = startWithFakeGarmin(LOG_NOW);
+        server.send(INITIALIZE);
+        server.reply();
+        server.send(INITIALIZED);
+
+        server.send("""
+                {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_daily_log",\
+                "arguments":{"from":"2026-10-24","to":"2026-11-20"}}}""");
+        JsonNode log = server.reply();
+        server.closeStdin();
+        assertThat(server.exitCode()).isZero();
+
+        assertThat(log.path("id").asInt()).isEqualTo(3);
+        assertThat(log.path("result").path("isError").asBoolean()).isFalse();
+        assertThat(text(log)).isEqualTo(compact(LOG_FROM_THE_CAPTURE));
+        assertOnlyJsonRpcOnStdout(server, 2);
+        assertThat(Files.readString(logFile())).containsPattern("get_daily_log worked in \\d+ ms");
         assertNoTokens(server);
     }
 
@@ -341,11 +378,16 @@ class ServeModeTest {
      * stopped at {@link com.hammez.stride.mcp.ToolFixtures#NOW}, as in the tool tests.
      */
     private Server startWithFakeGarmin() throws IOException {
-        // Good for another hour at NOW, so no refresh.
-        garmin.signedInApi(tokenFile(), Clock.fixed(NOW, ZoneOffset.UTC));
+        return startWithFakeGarmin(NOW);
+    }
+
+    /** The same, with the clock stopped at {@code now}. */
+    private Server startWithFakeGarmin(Instant now) throws IOException {
+        // Good for another hour at now, so no refresh.
+        garmin.signedInApi(tokenFile(), Clock.fixed(now, ZoneOffset.UTC));
         return start("serve", "--spring.main.sources=" + FakeGarminServe.class.getName(),
                 "--stride.test.fake-garmin=" + garmin.config().connectApiBaseUrl(),
-                "--stride.test.now=" + NOW);
+                "--stride.test.now=" + now);
     }
 
     private Path tokenFile() {

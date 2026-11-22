@@ -145,6 +145,14 @@ public record GarminDataConfig(
     public static final int DEFAULT_WEIGHT_RANGE_DAYS = 30;
 
     /**
+     * The daily log's range, in days, used when no {@code from} is given: the CLI's {@code log} and
+     * {@code get_daily_log}. With no dates it ends yesterday, the day just finished, which is the one to log (phase
+     * 4b). With only {@code to}, it ends there (the owner's choice, 22 November 2026). The tool's description and the
+     * usage text say "yesterday" and "that one day", so they need changing with it.
+     */
+    public static final int DEFAULT_LOG_RANGE_DAYS = 1;
+
+    /**
      * The query for {@code weighInsPath} and {@code weighInsRangePath}: every weigh-in, not one a day. The client and
      * {@code capture} both send this.
      */

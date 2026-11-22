@@ -15,6 +15,7 @@ import com.hammez.stride.garmin.ActivitySummary;
 import com.hammez.stride.garmin.DailySummary;
 import com.hammez.stride.garmin.DayWeight;
 import com.hammez.stride.garmin.Lap;
+import com.hammez.stride.garmin.LogDay;
 import com.hammez.stride.garmin.Sleep;
 import com.hammez.stride.garmin.Units;
 import com.hammez.stride.garmin.WeighIn;
@@ -193,6 +194,54 @@ final class ToolReplies {
     private static WeightReply.Point point(DayWeight day) {
         return day == null ? null
                 : new WeightReply.Point(day.date().toString(), oneDecimal(day.weight().weightKilograms()));
+    }
+
+    /**
+     * @param log  every day asked for, oldest first, as {@code GarminClient.dailyLog} returns them
+     * @param from first day asked for
+     * @param to   last day asked for
+     * @param zone the owner's, for the times of the weigh-ins
+     */
+    LogReply log(List<LogDay> log, LocalDate from, LocalDate to, LocalDate today, ZoneId zone) {
+        var days = log.stream().map(day -> logDay(day, zone)).toList();
+        return new LogReply(today.toString(), zone.getId(), from.toString(), to.toString(), days);
+    }
+
+    private static LogReply.Day logDay(LogDay day, ZoneId zone) {
+        var activities = day.activities().stream().map(a -> new LogReply.Activity(
+                a.activity().id(),
+                a.activity().name(),
+                a.activity().type(),
+                a.group(),
+                Units.decimalMinutes(a.activity().durationSeconds())))
+                .toList();
+        return new LogReply.Day(
+                day.date().toString(),
+                day.isFinal(),
+                logSleep(day.sleep()),
+                day.steps(),
+                day.caloriesEaten(),
+                activities.isEmpty() ? null : activities,
+                day.weight() == null ? null : logWeight(day.weight(), zone));
+    }
+
+    /** The score and hours asleep, or null if Garmin has neither for the night. */
+    private static LogReply.Sleep logSleep(Sleep night) {
+        if (night == null || night.score() == null && night.sleepSeconds() == null) {
+            return null;
+        }
+        return new LogReply.Sleep(night.score(), Units.decimalHours(night.sleepSeconds()));
+    }
+
+    private static LogReply.Weight logWeight(DayWeight day, ZoneId zone) {
+        WeighIn body = day.bodyComposition();
+        Instant time = day.picked().time();
+        return new LogReply.Weight(
+                day.weight() == null ? null : oneDecimal(day.weight().weightKilograms()),
+                body == null ? null : oneDecimal(body.bodyFatPercent()),
+                body == null ? null : oneDecimal(body.muscleMassKilograms()),
+                time == null ? null : CLOCK.format(time.atZone(zone)),
+                day.weighIns());
     }
 
     /**

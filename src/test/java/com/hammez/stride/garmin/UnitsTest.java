@@ -25,6 +25,22 @@ class UnitsTest {
     }
 
     @Test
+    void decimalHoursAndMinutesHaveOneDecimalPlaceAndHalfwayRoundsUp() {
+        // As the health log has them: 6.55 hours is 6.6, and 1:10:03 is 70.1 minutes.
+        assertThat(Units.decimalHours(23_580)).isEqualTo(6.6);
+        assertThat(Units.decimalHours(31_860)).isEqualTo(8.9);
+        assertThat(Units.decimalHours(27_647)).isEqualTo(7.7);
+        assertThat(Units.decimalHours(36_000)).isEqualTo(10.0);
+        assertThat(Units.decimalHours(0)).isEqualTo(0.0);
+        assertThat(Units.decimalHours(null)).isNull();
+        assertThat(Units.decimalMinutes(4203.0)).isEqualTo(70.1);
+        assertThat(Units.decimalMinutes(2994.0)).isEqualTo(49.9);
+        assertThat(Units.decimalMinutes(2996.9)).isEqualTo(49.9);
+        assertThat(Units.decimalMinutes(2997.0)).isEqualTo(50.0);
+        assertThat(Units.decimalMinutes(null)).isNull();
+    }
+
+    @Test
     void paceIsMinutesAndSecondsPerKilometre() {
         assertThat(Units.pace(2.338)).isEqualTo("7:08 /km");
         assertThat(Units.pace(1000 / 299.6)).isEqualTo("5:00 /km");

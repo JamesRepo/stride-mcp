@@ -108,7 +108,10 @@ class GarminToolsSideBySideTest {
         }
     }
 
-    /** All five tools, each twice: two calls for the same day, range or activity at once. */
+    /**
+     * The five tools of phases 3 and 4a, each twice: two calls for the same day, range or activity at once.
+     * get_daily_log's pinned reply is on another day (see GarminToolsTest), and it shares the same profile lookup.
+     */
     private static final List<Call> CALLS = Stream.of(
             new Call("get_activities", Map.of(), LAST_SEVEN_DAYS),
             new Call("get_activity", Map.of("id", 24816092240L), STAIR_STEPPER),

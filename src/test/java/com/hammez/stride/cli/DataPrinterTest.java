@@ -8,11 +8,15 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
 
 import com.hammez.stride.garmin.ActivitySummary;
+import com.hammez.stride.garmin.DayWeight;
+import com.hammez.stride.garmin.LogDay;
+import com.hammez.stride.garmin.WeighIn;
 
 /** The plan's example, and the CLI's units. DataCommandsTest covers the other layouts. */
 class DataPrinterTest {
@@ -37,6 +41,31 @@ class DataPrinterTest {
                 Thu 22 Oct  running  Islington Running   5.05 km  36:01  7:08 /km  143     24810777073
                 Sun 18 Oct  running  Islington Running   8.01 km  53:51  6:43 /km  149     24765567036
                 2 running activities in the last 7 days (Sat 17 Oct to Fri 23 Oct).
+                """);
+    }
+
+    @Test
+    void aLogDayWithOnlyBodyCompositionAndAnActivityWithNoGroupOrDuration() {
+        var day = LocalDate.of(2026, 11, 12);
+        var body = new WeighIn(day, Instant.parse("2026-11-12T07:10:00Z"), null, null, 18.04, null, 33.04, null,
+                null, null);
+        var activity = new ActivitySummary(7L, "Something new", "new_sport_2030", null, null, null, null, null, null,
+                null, null, null, null);
+        var log = List.of(new LogDay(day, true, null, null, null, List.of(new LogDay.Activity(activity, null)),
+                new DayWeight(null, body, 1)));
+        var bytes = new ByteArrayOutputStream();
+
+        new DataPrinter(new PrintStream(bytes, true, StandardCharsets.UTF_8)).log(log, day, day, ZoneId.of("Europe/London"));
+
+        assertThat(bytes.toString(StandardCharsets.UTF_8)).isEqualTo("""
+                Date        Sleep  Hours  Steps  Calories eaten  Weight  Body fat   Muscle  Weighed  Weigh-ins
+                Thu 12 Nov      –      –      –               –       –     18.0%  33.0 kg  07:10    1
+
+                Date        Type            Group  Minutes  Name           Id
+                Thu 12 Nov  new_sport_2030  –            –  Something new  7
+
+                1 day from Thu 12 Nov to Thu 12 Nov.
+                Sleep is the night that ended that morning. Calories eaten are food logged, not burned.
                 """);
     }
 

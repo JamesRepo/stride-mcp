@@ -1,6 +1,7 @@
 package com.hammez.stride.cli;
 
 import static com.hammez.stride.garmin.auth.FakeGarmin.PROFILE_PATH;
+import static com.hammez.stride.mcp.ToolFixtures.LOG_ACTIVITIES;
 import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.BufferedReader;
@@ -36,7 +37,8 @@ import tools.jackson.databind.json.JsonMapper;
 /**
  * The data commands, on a real GarminClient and cache talking to a fake Garmin, with replies from the fixtures.
  * The profile's time zone is Europe/London, where it is already Sat 24 October (00:30), while in UTC (the
- * computer's zone here) it is still the 23rd. So "today" is the 24th.
+ * computer's zone here) it is still the 23rd. So "today" is the 24th. Most of the daily log's tests run on the evening
+ * of its capture instead, 20 November, so that its fixtures' days are in the past.
  */
 class DataCommandsTest {
 
@@ -51,13 +53,19 @@ class DataCommandsTest {
     private static final String SLEEP = "/wellness-service/wellness/dailySleepData/jo runner";
     private static final String WEIGHT_PATH = "/weight-service/weight/dayview/";
     private static final String WEIGHT_RANGE_PATH = "/weight-service/weight/range/";
+    private static final String STEPS_RANGE = "/usersummary-service/v2/dailysummaries";
+    private static final String SLEEP_RANGE_PATH = "/sleep-service/stats/sleep/daily/";
+    private static final String ACTIVITY_TYPES = "/activity-service/activity/activityTypes";
+
+    /** For the daily log: the evening of its capture, 20 November, 22:38 in London. See {@link #onTheEveningOfTheCapture}. */
+    private static final Instant LOG_NOW = Instant.parse("2026-11-20T22:38:00Z");
 
     @TempDir
     Path temp;
 
     private final FakeGarmin garmin = new FakeGarmin();
     private final JsonMapper json = JsonMapper.builder().build();
-    private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+    private Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
     private final ByteArrayOutputStream out = new ByteArrayOutputStream();
     private final ByteArrayOutputStream err = new ByteArrayOutputStream();
     private GarminApi api;
@@ -511,6 +519,195 @@ class DataCommandsTest {
         assertThat(garmin.requests()).noneMatch(request -> request.path().startsWith(WEIGHT_RANGE_PATH));
     }
 
+    // log
+
+    @Test
+    void logFromTheRealReplies() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, Map.of("startDate", "2026-10-24", "endDate", "2026-11-20"), 200,
+                        Fixtures.read("summary-range.json"))
+                .respond(SLEEP_RANGE_PATH + "2026-10-24/2026-11-20", 200, Fixtures.read("sleep-range.json"))
+                .respond(WEIGHT_RANGE_PATH + "2026-10-24/2026-11-20", 200, Fixtures.read("weight-range.json"))
+                .respond(ACTIVITIES, 200, LOG_ACTIVITIES)
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"));
+
+        assertThat(run("log", "2026-10-24", "2026-11-20")).isZero();
+
+        // The same numbers as get_daily_log. Today, the 20th, isn't final.
+        assertThat(out()).isEqualTo("""
+                Date         Sleep  Hours   Steps  Calories eaten   Weight  Body fat   Muscle  Weighed  Weigh-ins
+                Sat 24 Oct      75    7.3   9,013      3,226 kcal        –         –        –  –        –
+                Sun 25 Oct      82    8.9  13,768      2,556 kcal        –         –        –  –        –
+                Mon 26 Oct       –      –       –               –        –         –        –  –        –
+                Tue 27 Oct       –      –       –               –        –         –        –  –        –
+                Wed 28 Oct       –      –       –               –        –         –        –  –        –
+                Thu 29 Oct       –      –       –               –        –         –        –  –        –
+                Fri 30 Oct       –      –       –               –        –         –        –  –        –
+                Sat 31 Oct       –      –       –               –        –         –        –  –        –
+                Sun 1 Nov        –      –       –               –        –         –        –  –        –
+                Mon 2 Nov        –      –       –               –        –         –        –  –        –
+                Tue 3 Nov        –      –       –               –        –         –        –  –        –
+                Wed 4 Nov        –      –       –               –        –         –        –  –        –
+                Thu 5 Nov        –      –       –               –        –         –        –  –        –
+                Fri 6 Nov        –      –       –               –        –         –        –  –        –
+                Sat 7 Nov        –      –       –               –        –         –        –  –        –
+                Sun 8 Nov        –      –       –               –        –         –        –  –        –
+                Mon 9 Nov        –      –       –               –        –         –        –  –        –
+                Tue 10 Nov       –      –       –               –        –         –        –  –        –
+                Wed 11 Nov       –      –       –               –        –         –        –  –        –
+                Thu 12 Nov      50    6.6  14,239               –        –         –        –  –        –
+                Fri 13 Nov       –      –       –               –        –         –        –  –        –
+                Sat 14 Nov       –      –       –               –  75.8 kg         –        –  08:31    2
+                Sun 15 Nov       –      –       –               –        –         –        –  –        –
+                Mon 16 Nov       –      –       –               –        –         –        –  –        –
+                Tue 17 Nov       –      –       –               –  76.0 kg     18.0%  33.0 kg  07:15    1
+                Wed 18 Nov       –      –       –               –        –         –        –  –        –
+                Thu 19 Nov      49    7.7   6,352      2,667 kcal        –         –        –  –        –
+                Fri 20 Nov*     95   10.0      95      2,442 kcal  76.1 kg     18.0%  33.0 kg  08:35    1
+                * Not final: Garmin may still add to it, so don't log it yet.
+
+                Date        Type               Group              Minutes  Name            Id
+                Thu 12 Nov  running            running               49.9  London Running  1
+                Thu 19 Nov  treadmill_running  running               30.0  Treadmill       2
+                Thu 19 Nov  strength_training  fitness_equipment     70.1  Strength        3
+
+                28 days from Sat 24 Oct to Fri 20 Nov.
+                Sleep is the night that ended that morning. Calories eaten are food logged, not burned.
+                """);
+        assertThat(err()).isEmpty();
+        assertThat(garmin.requests(STEPS_RANGE)).hasSize(1);
+    }
+
+    @Test
+    void logAsTheQuickStartShowsIt() {
+        // The example in docs/quick-start.md ("Daily log"): keep them the same.
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, Map.of("startDate", "2026-11-12", "endDate", "2026-11-20"), 200,
+                        Fixtures.read("summary-range.json"))
+                .respond(SLEEP_RANGE_PATH + "2026-11-12/2026-11-20", 200, Fixtures.read("sleep-range.json"))
+                .respond(WEIGHT_RANGE_PATH + "2026-11-12/2026-11-20", 200, Fixtures.read("weight-range.json"))
+                .respond(ACTIVITIES, 200, LOG_ACTIVITIES)
+                .respond(ACTIVITY_TYPES, 200, Fixtures.read("activity-types.json"));
+
+        assertThat(run("log", "2026-11-12", "2026-11-20")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Date         Sleep  Hours   Steps  Calories eaten   Weight  Body fat   Muscle  Weighed  Weigh-ins
+                Thu 12 Nov      50    6.6  14,239               –        –         –        –  –        –
+                Fri 13 Nov       –      –       –               –        –         –        –  –        –
+                Sat 14 Nov       –      –       –               –  75.8 kg         –        –  08:31    2
+                Sun 15 Nov       –      –       –               –        –         –        –  –        –
+                Mon 16 Nov       –      –       –               –        –         –        –  –        –
+                Tue 17 Nov       –      –       –               –  76.0 kg     18.0%  33.0 kg  07:15    1
+                Wed 18 Nov       –      –       –               –        –         –        –  –        –
+                Thu 19 Nov      49    7.7   6,352      2,667 kcal        –         –        –  –        –
+                Fri 20 Nov*     95   10.0      95      2,442 kcal  76.1 kg     18.0%  33.0 kg  08:35    1
+                * Not final: Garmin may still add to it, so don't log it yet.
+
+                Date        Type               Group              Minutes  Name            Id
+                Thu 12 Nov  running            running               49.9  London Running  1
+                Thu 19 Nov  treadmill_running  running               30.0  Treadmill       2
+                Thu 19 Nov  strength_training  fitness_equipment     70.1  Strength        3
+
+                9 days from Thu 12 Nov to Fri 20 Nov.
+                Sleep is the night that ended that morning. Calories eaten are food logged, not burned.
+                """);
+    }
+
+    @Test
+    void logDefaultsToYesterdayAndADayWithNothingIsAllDashes() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-19", "2026-11-19");
+
+        assertThat(run("log")).isZero();
+
+        assertThat(out()).isEqualTo("""
+                Date        Sleep  Hours  Steps  Calories eaten  Weight  Body fat  Muscle  Weighed  Weigh-ins
+                Thu 19 Nov      –      –      –               –       –         –       –  –        –
+
+                No activities.
+
+                1 day from Thu 19 Nov to Thu 19 Nov.
+                Sleep is the night that ended that morning. Calories eaten are food logged, not burned.
+                """);
+        assertThat(garmin.requests(ACTIVITY_TYPES)).isEmpty();
+    }
+
+    @Test
+    void logWithOnlyFromGoesToYesterdayOrIsJustToday() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        nothingFor("2026-11-08", "2026-11-19");
+        nothingFor("2026-11-20", "2026-11-20");
+
+        assertThat(run("log", "2026-11-08")).isZero();
+        out.reset();
+        assertThat(run("log", "2026-11-20")).isZero();
+
+        assertThat(garmin.requests(SLEEP_RANGE_PATH + "2026-11-08/2026-11-19")).hasSize(1);
+        assertThat(garmin.requests(SLEEP_RANGE_PATH + "2026-11-20/2026-11-20")).hasSize(1);
+        assertThat(out()).startsWith("""
+                Date         Sleep  Hours  Steps  Calories eaten  Weight  Body fat  Muscle  Weighed  Weigh-ins
+                Fri 20 Nov*      –      –      –               –       –         –       –  –        –
+                * Not final: Garmin may still add to it, so don't log it yet.
+                """);
+    }
+
+    @Test
+    void logAcrossTwoYearsHasTheYears() {
+        signedIn();
+        nothingFor("2025-12-31", "2026-01-01");
+
+        assertThat(run("log", "2025-12-31", "2026-01-01")).isZero();
+
+        assertThat(out()).contains("Wed 31 Dec 2025", "Thu 1 Jan 2026",
+                "2 days from Wed 31 Dec 2025 to Thu 1 Jan 2026.");
+    }
+
+    @Test
+    void logsBadRangesAreExitCodeTwoWithNothingSent() {
+        assertThat(run("log", "2026-11-20", "2026-11-19")).isEqualTo(2);
+        assertThat(run("log", "2026-10-23", "2026-11-20")).isEqualTo(2);
+
+        assertThat(err().lines()).containsExactly("2026-11-20 is after 2026-11-19. Put the earlier date first.",
+                "log covers at most 28 days. 2026-10-23 to 2026-11-20 is 29 days, both included.");
+        assertThat(garmin.requests()).isEmpty();
+    }
+
+    @Test
+    void logsDaysAfterTodayOrTooLongAgoAskForNothingButTheProfile() {
+        onTheEveningOfTheCapture();
+        signedIn();
+
+        assertThat(run("log", "2026-11-21")).isEqualTo(2);
+        assertThat(run("log", "2026-11-14", "2026-11-21")).isEqualTo(2);
+        assertThat(run("log", "2026-10-22")).isEqualTo(2);
+
+        assertThat(err().lines()).containsExactly(
+                "2026-11-21 is after today (2026-11-20). Garmin has nothing for it yet.",
+                "2026-11-21 is after today (2026-11-20). Garmin has nothing for it yet.",
+                "log covers at most 28 days. 2026-10-22 to 2026-11-19 is 29 days, both included.");
+        assertThat(garmin.requests()).extracting(FakeGarmin.Request::path).containsOnly(PROFILE_PATH, PERSONAL);
+    }
+
+    @Test
+    void logRateLimitedIsExitCodeOneAndAskedOnce() {
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, 429, "");
+
+        assertThat(run("log")).isEqualTo(1);
+
+        assertThat(err()).isEqualTo("Garmin is rate limiting. Wait a while (an hour or more) before trying again.\n");
+        assertThat(out()).isEmpty();
+        assertThat(garmin.requests(STEPS_RANGE)).hasSize(1);
+        assertThat(garmin.requests()).extracting(FakeGarmin.Request::path)
+                .containsOnly(PROFILE_PATH, PERSONAL, STEPS_RANGE);
+    }
+
     // sleep
 
     @Test
@@ -611,17 +808,24 @@ class DataCommandsTest {
                 .respond(SLEEP, 204, "").respond(SLEEP, 204, "")
                 .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}")
                 .respond(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24", 200, "{}");
+        // log: yesterday, the 23rd.
+        nothingFor("2026-10-23", "2026-10-23");
+        nothingFor("2026-10-23", "2026-10-23");
 
         for (List<String> command : List.of(List.of("activities"), List.of("activity", "24816092240"),
-                List.of("sleep"), List.of("weight"))) {
+                List.of("sleep"), List.of("weight"), List.of("log"))) {
             assertThat(run(command)).isZero();
             assertThat(run(withNoCache(command))).isZero();
         }
 
-        assertThat(garmin.requests(ACTIVITIES)).hasSize(2);
+        // activities, then log's search, a day wider at each end.
+        assertThat(garmin.requests(ACTIVITIES)).extracting(request -> request.queryParams().get("startDate"))
+                .containsExactly("2026-10-18", "2026-10-18", "2026-10-22", "2026-10-22");
         assertThat(garmin.requests(ACTIVITY)).hasSize(2);
         assertThat(garmin.requests(SLEEP)).hasSize(2);
         assertThat(garmin.requests(WEIGHT_RANGE_PATH + "2026-09-25/2026-10-24")).hasSize(2);
+        assertThat(garmin.requests(SLEEP_RANGE_PATH + "2026-10-23/2026-10-23")).hasSize(2);
+        assertThat(garmin.requests(STEPS_RANGE)).hasSize(2);
     }
 
     @Test
@@ -693,9 +897,11 @@ class DataCommandsTest {
             assertThat(run("sleep", date)).as(date).isEqualTo(2);
             assertThat(run("weight", date)).as(date).isEqualTo(2);
             assertThat(run("weight", "2026-10-01", date)).as(date).isEqualTo(2);
+            assertThat(run("log", date)).as(date).isEqualTo(2);
+            assertThat(run("log", "2026-10-01", date)).as(date).isEqualTo(2);
         }
 
-        assertThat(err().lines()).hasSize(20).containsOnly("Dates look like 2026-10-22.");
+        assertThat(err().lines()).hasSize(30).containsOnly("Dates look like 2026-10-22.");
         assertThat(garmin.requests()).isEmpty();
     }
 
@@ -733,7 +939,8 @@ class DataCommandsTest {
         for (List<String> args : List.of(List.of("activity"), List.of("activity", "1", "2"),
                 List.of("activities", "7"), List.of("summary", "2026-10-22", "2026-10-23"),
                 List.of("sleep", "2026-10-22", "extra"),
-                List.of("weight", "2026-10-01", "2026-10-02", "2026-10-03"))) {
+                List.of("weight", "2026-10-01", "2026-10-02", "2026-10-03"),
+                List.of("log", "2026-10-01", "2026-10-02", "2026-10-03"))) {
             out.reset();
             err.reset();
             assertThat(run(args)).as(args.toString()).isEqualTo(2);
@@ -757,8 +964,8 @@ class DataCommandsTest {
         err.reset();
 
         assertThat(run("whoami", "--no-cache")).isEqualTo(2);
-        assertThat(err()).startsWith("--no-cache only works with activities, activity, summary, sleep and weight."
-                + "\nUsage:");
+        assertThat(err()).startsWith("--no-cache only works with activities, activity, summary, sleep, weight and "
+                + "log.\nUsage:");
         err.reset();
 
         assertThat(run("sleep", "--no-cache=yes")).isEqualTo(2);
@@ -784,7 +991,9 @@ class DataCommandsTest {
 
         assertThat(out()).contains("activities", "--days N", "today included (1 to 90)", "--type T", "activity <id>",
                 "summary [date]", "sleep [date]", "weight [from] [to]", "Default the last 30 days",
-                "At most 367 days", "--no-cache", "summary, sleep or weight", "Dates look like 2026-10-22.");
+                "At most 367 days", "log [from] [to]", "Default yesterday", "up to yesterday (or just today",
+                "At most 28 days, and none after today", "--no-cache", "summary, sleep, weight or log",
+                "Dates look like 2026-10-22.");
         assertThat(err()).isEmpty();
         assertThat(garmin.requests()).isEmpty();
     }
@@ -804,6 +1013,19 @@ class DataCommandsTest {
         var io = new CliIo(new BufferedReader(new StringReader("")), new PrintStream(out, true, StandardCharsets.UTF_8),
                 new PrintStream(err, true, StandardCharsets.UTF_8));
         return new StrideCommands(null, null, cache, client, io, ZoneOffset.UTC).run(args);
+    }
+
+    /** The evening of the daily log's capture: today is 20 November. Call before running anything. */
+    private void onTheEveningOfTheCapture() {
+        clock = Clock.fixed(LOG_NOW, ZoneOffset.UTC);
+    }
+
+    /** Queues a daily log from {@code from} to {@code to} with nothing in it: no steps, sleep, weigh-ins or activities. */
+    private void nothingFor(String from, String to) {
+        garmin.respond(STEPS_RANGE, 200, "{\"data\":[]}")
+                .respond(SLEEP_RANGE_PATH + from + "/" + to, 200, "{\"individualStats\":[]}")
+                .respond(WEIGHT_RANGE_PATH + from + "/" + to, 200, "{\"dailyWeightSummaries\":[]}")
+                .respond(ACTIVITIES, 200, "[]");
     }
 
     /** Queues the profile and its time zone (Europe/London) once. The cache keeps them after that. */
