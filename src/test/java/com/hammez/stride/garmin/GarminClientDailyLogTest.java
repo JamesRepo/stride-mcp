@@ -9,6 +9,8 @@ import java.nio.file.Path;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.util.List;
@@ -83,14 +85,14 @@ class GarminClientDailyLogTest {
                 fixture("summary-range.json"));
 
         assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(
-                new DayTotals(OCT_24, 9013, 3226),
+                new DayTotals(OCT_24, 9013, 3226, midnightAfter(OCT_24)),
                 // The clock change: 25 hours long.
-                new DayTotals(OCT_25, 13768, 2556),
+                new DayTotals(OCT_25, 13768, 2556, midnightAfter(OCT_25)),
                 // Nothing logged in MyFitnessPal: consumedValue is null.
-                new DayTotals(NOV_12, 14239, null),
-                new DayTotals(NOV_19, 6352, 2667),
+                new DayTotals(NOV_12, 14239, null, midnightAfter(NOV_12)),
+                new DayTotals(NOV_19, 6352, 2667, midnightAfter(NOV_19)),
                 // Today, as far as the watch had synced (08:42).
-                new DayTotals(NOV_20, 95, 2442));
+                new DayTotals(NOV_20, 95, 2442, LocalDateTime.of(2026, 11, 20, 8, 42)));
         assertThat(garmin.requests(STEPS)).hasSize(1);
     }
 
@@ -107,13 +109,13 @@ class GarminClientDailyLogTest {
                  {"calendarDate":"2026-11-17","calories":{"consumedValue":1850.0}}]}""");
 
         assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(
-                new DayTotals(NOV_12, 100, null),
-                new DayTotals(NOV_13, 200, null),
-                new DayTotals(NOV_14, 300, null),
-                new DayTotals(LocalDate.of(2026, 11, 15), 400, null),
-                new DayTotals(LocalDate.of(2026, 11, 16), 500, null),
+                new DayTotals(NOV_12, 100, null, null),
+                new DayTotals(NOV_13, 200, null, null),
+                new DayTotals(NOV_14, 300, null, null),
+                new DayTotals(LocalDate.of(2026, 11, 15), 400, null, null),
+                new DayTotals(LocalDate.of(2026, 11, 16), 500, null, null),
                 // Calories eaten, but no steps.
-                new DayTotals(LocalDate.of(2026, 11, 17), null, 1850));
+                new DayTotals(LocalDate.of(2026, 11, 17), null, 1850, null));
     }
 
     @Test
@@ -129,7 +131,7 @@ class GarminClientDailyLogTest {
                  {"calendarDate":"2026-11-20","movement":{"steps":{"value":95}}},
                  {"calendarDate":"2026-11-21","movement":{"steps":{"value":2}}}]}""");
 
-        assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(new DayTotals(NOV_20, 95, null));
+        assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(new DayTotals(NOV_20, 95, null, null));
     }
 
     @Test
@@ -152,7 +154,7 @@ class GarminClientDailyLogTest {
                 {"data":[{"calendarDate":"2026-10-23","privacyProtected":true},
                  {"calendarDate":"2026-11-12","privacyProtected":false,"movement":{"steps":{"value":14239}}}]}""");
 
-        assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(new DayTotals(NOV_12, 14239, null));
+        assertThat(client.dailyTotals(OCT_24, NOV_20)).containsExactly(new DayTotals(NOV_12, 14239, null, null));
     }
 
     @Test
@@ -361,7 +363,8 @@ class GarminClientDailyLogTest {
         });
         assertThat(nov12.weight()).isNull();
         // A day none of the trimmed fixtures kept: Garmin has nothing for it here.
-        assertThat(log.get(20)).isEqualTo(new LogDay(NOV_13, true, null, null, null, List.of(), null));
+        assertThat(log.get(20))
+                .isEqualTo(new LogDay(NOV_13, LogDay.State.FINAL, null, null, null, null, List.of(), null));
         // Two weights typed in: the first counts, as in 4a.
         LogDay nov14 = log.get(21);
         assertThat(nov14.weight().weight().weightKilograms()).isEqualTo(75.8);
@@ -401,6 +404,9 @@ class GarminClientDailyLogTest {
 
         assertThat(log.get(1).date()).isEqualTo(OCT_25);
         assertThat(log.get(1).steps()).isEqualTo(13768);
+        // 25 hours of watch data, to midnight: final.
+        assertThat(log.get(1).isFinal()).isTrue();
+        assertThat(log.get(1).watchDataUntil()).isEqualTo(midnightAfter(OCT_25));
         assertThat(log.get(1).activities()).extracting(a -> a.activity().name())
                 .containsExactly("First 01:30", "Second 01:30", "Late");
         assertThat(log.get(2).activities()).extracting(a -> a.activity().name()).containsExactly("Next day");
@@ -536,9 +542,10 @@ class GarminClientDailyLogTest {
         signedIn();
         nothingButActivities(NOV_12, NOV_13, "[]");
 
+        // No watch data at all, and no later day with any, so neither is final.
         assertThat(client.dailyLog(NOV_12, NOV_13)).containsExactly(
-                new LogDay(NOV_12, true, null, null, null, List.of(), null),
-                new LogDay(NOV_13, true, null, null, null, List.of(), null));
+                new LogDay(NOV_12, LogDay.State.WATCH_NOT_SYNCED, null, null, null, null, List.of(), null),
+                new LogDay(NOV_13, LogDay.State.WATCH_NOT_SYNCED, null, null, null, null, List.of(), null));
         assertThat(garmin.requests(TYPES)).isEmpty();
     }
 
@@ -546,9 +553,117 @@ class GarminClientDailyLogTest {
     void todayAndLaterArentFinal() {
         signedIn();
         LocalDate nov21 = NOV_20.plusDays(1);
+        // Even with watch data to midnight.
+        garmin.respond(STEPS, 200, "{\"data\":[" + String.join(",", synced(NOV_19), synced(NOV_20), synced(nov21))
+                + "]}");
         nothingButActivities(NOV_19, nov21, "[]");
 
         assertThat(client.dailyLog(NOV_19, nov21)).extracting(LogDay::isFinal).containsExactly(true, false, false);
+    }
+
+    @Test
+    void aPastDayTheWatchHasntSyncedSinceIsntFinal() {
+        // As on 22 November 2026: the watch last synced in the morning of the 18th here, and not since.
+        signedIn();
+        LocalDate nov17 = LocalDate.of(2026, 11, 17);
+        LocalDate nov18 = LocalDate.of(2026, 11, 18);
+        garmin.respond(STEPS, 200, "{\"data\":[" + synced(nov17) + ","
+                + until(nov18, LocalDateTime.of(2026, 11, 18, 8, 42)) + "]}");
+        nothingButActivities(nov17, NOV_19, "[]");
+
+        List<LogDay> log = client.dailyLog(nov17, NOV_19);
+
+        assertThat(log).extracting(LogDay::date, LogDay::isFinal, LogDay::watchDataUntil).containsExactly(
+                tuple(nov17, true, midnightAfter(nov17)),
+                // Stops at the last sync.
+                tuple(nov18, false, LocalDateTime.of(2026, 11, 18, 8, 42)),
+                // Nothing from the watch at all: yesterday, before the overnight sync.
+                tuple(NOV_19, false, null));
+    }
+
+    @Test
+    void aDayWhoseWatchDataStopsEarlyIsFinalOnceALaterDayHasWatchData() {
+        // A flat battery at 20:15 on the 17th, charged and synced on the 18th: the 17th never runs to midnight, but
+        // the 18th's data could only have come from a sync after the 17th ended.
+        signedIn();
+        LocalDate nov17 = LocalDate.of(2026, 11, 17);
+        LocalDate nov18 = LocalDate.of(2026, 11, 18);
+        garmin.respond(STEPS, 200, "{\"data\":[" + until(nov17, LocalDateTime.of(2026, 11, 17, 20, 15)) + ","
+                + until(nov18, LocalDateTime.of(2026, 11, 18, 9, 0)) + "," + synced(NOV_19) + "]}");
+        nothingButActivities(nov17, NOV_19, "[]");
+
+        assertThat(client.dailyLog(nov17, NOV_19)).extracting(LogDay::isFinal).containsExactly(true, true, true);
+    }
+
+    @Test
+    void aLastDayWhoseWatchDataStopsEarlyIsFinalIfTheNextDayHasWatchData() {
+        // A flat battery at 18:00 yesterday, charged and synced today. Yesterday alone has no later day in the range,
+        // so the next day's steps are asked for too (the owner's choice, 22 November 2026), only to decide.
+        signedIn();
+        garmin.respond(STEPS, Map.of("startDate", "2026-11-19", "endDate", "2026-11-19"), 200,
+                        "{\"data\":[" + until(NOV_19, LocalDateTime.of(2026, 11, 19, 18, 0)) + "]}")
+                .respond(STEPS, Map.of("startDate", "2026-11-20", "endDate", "2026-11-20"), 200,
+                        "{\"data\":[" + until(NOV_20, LocalDateTime.of(2026, 11, 20, 9, 30)) + "]}");
+        nothingElse(NOV_19, NOV_19);
+
+        List<LogDay> log = client.dailyLog(NOV_19, NOV_19);
+
+        assertThat(log).singleElement().satisfies(day -> {
+            assertThat(day.state()).isEqualTo(LogDay.State.FINAL);
+            assertThat(day.watchDataUntil()).isEqualTo(LocalDateTime.of(2026, 11, 19, 18, 0));
+        });
+        assertThat(garmin.requests(STEPS)).hasSize(2);
+    }
+
+    @Test
+    void aLastDayWhoseWatchDataStopsEarlyStaysNotFinalIfTheNextDayHasNone() {
+        signedIn();
+        garmin.respond(STEPS, Map.of("startDate", "2026-11-19", "endDate", "2026-11-19"), 200,
+                        "{\"data\":[" + until(NOV_19, LocalDateTime.of(2026, 11, 19, 18, 0)) + "]}")
+                .respond(STEPS, Map.of("startDate", "2026-11-20", "endDate", "2026-11-20"), 200, "{\"data\":[]}");
+        nothingElse(NOV_19, NOV_19);
+
+        assertThat(client.dailyLog(NOV_19, NOV_19).getFirst().state()).isEqualTo(LogDay.State.WATCH_NOT_SYNCED);
+    }
+
+    @Test
+    void theNextDayIsOnlyAskedForWhenTheLastDaysWatchDataStopsEarly() {
+        // To midnight: final already. No watch data: not asked (the owner's choice). Today: never final.
+        signedIn();
+        garmin.respond(STEPS, 200, "{\"data\":[" + synced(NOV_19) + "]}")
+                .respond(STEPS, 200, "{\"data\":[]}")
+                .respond(STEPS, 200, "{\"data\":[" + until(NOV_20, LocalDateTime.of(2026, 11, 20, 8, 42)) + "]}");
+        nothingElse(NOV_19, NOV_19);
+        nothingElse(NOV_19, NOV_19);
+        nothingElse(NOV_20, NOV_20);
+
+        assertThat(client.dailyLog(NOV_19, NOV_19).getFirst().state()).isEqualTo(LogDay.State.FINAL);
+        assertThat(client.dailyLog(NOV_19, NOV_19).getFirst().state()).isEqualTo(LogDay.State.WATCH_NOT_SYNCED);
+        assertThat(client.dailyLog(NOV_20, NOV_20).getFirst().state()).isEqualTo(LogDay.State.TODAY);
+        assertThat(garmin.requests(STEPS)).hasSize(3);
+    }
+
+    @Test
+    void aChronologyWithoutStepsIsntWatchData() {
+        // Garmin might make a day's chronology when only MyFitnessPal synced (not seen yet, 22 November 2026). So the
+        // 19th's calories and chronology to midnight show nothing about the watch: neither day is final.
+        signedIn();
+        LocalDate nov18 = LocalDate.of(2026, 11, 18);
+        garmin.respond(STEPS, 200, "{\"data\":[" + until(nov18, LocalDateTime.of(2026, 11, 18, 8, 42)) + ","
+                + """
+                {"calendarDate":"2026-11-19","calories":{"consumedValue":3884},
+                 "wellnessChronology":{"endTimestampLocal":"2026-11-20T00:00:00.0"}}""" + "]}");
+        nothingElse(nov18, NOV_19);
+
+        List<LogDay> log = client.dailyLog(nov18, NOV_19);
+
+        assertThat(log).extracting(LogDay::state, LogDay::watchDataUntil).containsExactly(
+                tuple(LogDay.State.WATCH_NOT_SYNCED, LocalDateTime.of(2026, 11, 18, 8, 42)),
+                // Its chronology isn't shown as watch data either.
+                tuple(LogDay.State.WATCH_NOT_SYNCED, null));
+        assertThat(log.get(1).caloriesEaten()).isEqualTo(3884);
+        // The 19th has no watch data, so the next day isn't asked for.
+        assertThat(garmin.requests(STEPS)).hasSize(1);
     }
 
     @Test
@@ -606,7 +721,7 @@ class GarminClientDailyLogTest {
                 activity(1, "Day before", "running", "2026-11-11T09:00:00Z", 600)) + "]");
 
         assertThat(client.dailyLog(NOV_12, NOV_12)).containsExactly(
-                new LogDay(NOV_12, true, null, null, null, List.of(), null));
+                new LogDay(NOV_12, LogDay.State.WATCH_NOT_SYNCED, null, null, null, null, List.of(), null));
         // None in the range, so no need for their groups.
         assertThat(garmin.requests(TYPES)).isEmpty();
     }
@@ -672,6 +787,31 @@ class GarminClientDailyLogTest {
                 {"activityId":%d,"activityName":"%s","activityType":{"typeKey":"%s"},
                  "startTimeLocal":"%s","startTimeGMT":"%s","duration":%s}""".formatted(id, name, type, local, gmt,
                 seconds);
+    }
+
+    /** Queues empty sleep, weigh-ins and activities for {@code from}–{@code to}, but no steps. */
+    private void nothingElse(LocalDate from, LocalDate to) {
+        garmin.respond("/sleep-service/stats/sleep/daily/" + from + "/" + to, 200, "{\"individualStats\":[]}")
+                .respond("/weight-service/weight/range/" + from + "/" + to, 200, "{\"dailyWeightSummaries\":[]}")
+                .respond(ACTIVITIES, 200, "[]");
+    }
+
+    /** Midnight at the end of {@code day}: where a synced day's watch data ends. */
+    private static LocalDateTime midnightAfter(LocalDate day) {
+        return day.plusDays(1).atStartOfDay();
+    }
+
+    /** A day in the steps range reply with 5,000 steps and watch data to midnight. */
+    private static String synced(LocalDate day) {
+        return until(day, midnightAfter(day));
+    }
+
+    /** A day in the steps range reply with 5,000 steps and watch data to {@code end} (local). */
+    private static String until(LocalDate day, LocalDateTime end) {
+        return """
+                {"calendarDate":"%s","movement":{"steps":{"value":5000}},
+                 "wellnessChronology":{"startTimestampLocal":"%sT00:00:00.0","endTimestampLocal":"%s"}}""".formatted(
+                day, day, end.format(DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.0")));
     }
 
     /** Queues the profile and its time zone (Europe/London) once. */

@@ -170,16 +170,18 @@ class GarminToolsTest {
                 + "in the owner's time zone, covering at most 28 days and none after today. For more, call again "
                 + "for each 28 days. Leave both out for yesterday. Only `from`: from there to yesterday, or just "
                 + "today if `from` is today. Only `to`: that one day. A range ending before yesterday is cached for "
-                + "up to a day, or an hour if Garmin had nothing. The reply also gives today's date in the owner's "
-                + "time zone.");
+                + "up to a day once the watch has synced past it, otherwise its sleep, steps and activities for up "
+                + "to 15 minutes. The reply also gives today's date in the owner's time zone.");
         // "Yesterday" and "that one day" are one day.
         assertThat(GarminDataConfig.DEFAULT_LOG_RANGE_DAYS).isEqualTo(1);
         // What it says the AI must know.
         assertThat(GarminTools.GET_DAILY_LOG).contains(
                 "caloriesEaten is the food logged that day in kcal (MyFitnessPal's daily total, as synced to "
                         + "Garmin). It is never calories burned.",
-                "final: false means the day may still change",
-                "so don't log it yet",
+                "final: false means the day may still change, so don't log it yet: it's today, or a past day the "
+                        + "watch hasn't synced since.",
+                "watchDataUntil: where Garmin's watch data for it stops (local, like 08:42, or none). Then ask the "
+                        + "owner to sync their watch, and call again with refresh.",
                 "the night that ended on the morning of that date",
                 "group is Garmin's top-level type",
                 "minutes (the whole duration, not the moving time)",
@@ -196,12 +198,15 @@ class GarminToolsTest {
                 assertThat(GarminTools.GET_DAILY_LOG).as(part.getSimpleName()).containsPattern("\\b" + name + "\\b");
             }
         }
-        // "Up to a day, or an hour if Garmin had nothing": the steps, sleep and weigh-ins over a range ending
-        // before yesterday. The activity search, a day wider, can end yesterday, so then it's less.
+        // "Up to a day": the steps, sleep and weigh-ins over a range ending before yesterday, and the activity
+        // search (a day wider, so it can end yesterday, and then it's less). Less again if Garmin had nothing.
+        // "Otherwise up to 15 minutes": an unsynced range's steps and sleep as recent days, activities as recent ones.
         var lifetimes = GarminDataConfig.defaults(garmin.config()).cacheLifetimes();
         assertThat(lifetimes.olderRange()).isEqualTo(Duration.ofDays(1));
         assertThat(lifetimes.olderActivities()).isEqualTo(Duration.ofDays(1));
         assertThat(lifetimes.emptyOlderDay()).isEqualTo(Duration.ofHours(1));
+        assertThat(lifetimes.recentDay()).isEqualTo(Duration.ofMinutes(15));
+        assertThat(lifetimes.recentActivities()).isLessThanOrEqualTo(Duration.ofMinutes(15));
         // The examples in it are real types and groups in Garmin's list.
         assertThat(GarminTools.GET_DAILY_LOG).contains("running for running, trail_running and treadmill_running, "
                 + "cycling for indoor_cycling, fitness_equipment for strength_training");
@@ -706,7 +711,8 @@ class GarminToolsTest {
         signedIn();
         garmin.respond(STEPS_RANGE, 200, """
                         {"data":[{"calendarDate":"2026-11-12","movement":{"steps":{"value":14239}},
-                         "calories":{"consumedValue":0}}]}""")
+                         "calories":{"consumedValue":0},
+                         "wellnessChronology":{"endTimestampLocal":"2026-11-13T00:00:00.0"}}]}""")
                 .respond(SLEEP_RANGE_PATH + "2026-11-12/2026-11-12", 200, """
                         {"individualStats":[{"calendarDate":"2026-11-12",
                          "values":{"sleepScore":50,"gmtSleepStartTimeInMillis":1794447708000}}]}""")
@@ -729,20 +735,46 @@ class GarminToolsTest {
     }
 
     @Test
-    void dailyLogDefaultsToYesterdayAndADayWithNothingIsOnlyItsDateAndFinal() {
+    void dailyLogDefaultsToYesterdayAndADayWithNoWatchDataIsntFinal() {
         onTheEveningOfTheCapture();
         signedIn();
         nothingFor("2026-11-19", "2026-11-19");
 
         String reply = ok("get_daily_log", Map.of());
 
+        // Garmin has nothing from the watch for it, and no later day, so the watch hasn't synced since.
         assertThat(reply).isEqualTo(compact("""
                 {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-11-19","to":"2026-11-19",
-                 "days":[{"date":"2026-11-19","final":true}]}"""));
+                 "days":[{"date":"2026-11-19","final":false,"watchDataUntil":"none"}]}"""));
         assertThat(garmin.requests(STEPS_RANGE).getFirst().queryParams())
                 .isEqualTo(Map.of("startDate", "2026-11-19", "endDate", "2026-11-19"));
         // No activities, so their types aren't needed.
         assertThat(garmin.requests(ACTIVITY_TYPES)).isEmpty();
+    }
+
+    @Test
+    void aPastDayTheWatchHasntSyncedSinceSaysWhereItsDataStops() {
+        // As on 22 November 2026: the watch last synced at 08:43 on the 18th here. Today never has watchDataUntil.
+        onTheEveningOfTheCapture();
+        signedIn();
+        garmin.respond(STEPS_RANGE, 200, """
+                        {"data":[
+                         {"calendarDate":"2026-11-17","movement":{"steps":{"value":11269}},
+                          "wellnessChronology":{"endTimestampLocal":"2026-11-18T00:00:00.0"}},
+                         {"calendarDate":"2026-11-18","movement":{"steps":{"value":95}},
+                          "wellnessChronology":{"endTimestampLocal":"2026-11-18T08:42:00.0"}}]}""")
+                .respond(SLEEP_RANGE_PATH + "2026-11-17/2026-11-20", 200, "{\"individualStats\":[]}")
+                .respond(WEIGHT_RANGE_PATH + "2026-11-17/2026-11-20", 200, "{\"dailyWeightSummaries\":[]}")
+                .respond(ACTIVITIES, 200, "[]");
+
+        String reply = ok("get_daily_log", Map.of("from", "2026-11-17", "to", "2026-11-20"));
+
+        assertThat(reply).isEqualTo(compact("""
+                {"today":"2026-11-20","timeZone":"Europe/London","from":"2026-11-17","to":"2026-11-20","days":[
+                 {"date":"2026-11-17","final":true,"steps":11269},
+                 {"date":"2026-11-18","final":false,"watchDataUntil":"08:42","steps":95},
+                 {"date":"2026-11-19","final":false,"watchDataUntil":"none"},
+                 {"date":"2026-11-20","final":false}]}"""));
     }
 
     @Test

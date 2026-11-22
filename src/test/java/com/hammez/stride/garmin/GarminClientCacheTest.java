@@ -409,13 +409,110 @@ class GarminClientCacheTest {
     }
 
     @Test
-    void rangeStepsLastLikeTheWeightRange() {
+    void rangeStepsLastADayOnlyOnceTheWatchHasSyncedPastThem() {
         signedIn();
-        String steps = "{\"data\":[{\"calendarDate\":\"2026-10-22\",\"movement\":{\"steps\":{\"value\":9000}}}]}";
-        expectLifetime(Duration.ofMinutes(15), STEPS, steps, () -> client().dailyTotals(OLDER, YESTERDAY));
-        expectLifetime(Duration.ofDays(1), STEPS, steps, () -> client().dailyTotals(OLDER.minusDays(27), OLDER));
-        expectLifetime(Duration.ofHours(1), STEPS, "{\"data\":[]}",
-                () -> client().dailyTotals(OLDER.minusDays(1), OLDER));
+        String synced = "{\"data\":[" + day(OLDER.minusDays(1), "2026-10-22T00:00:00.0") + ","
+                + day(OLDER, "2026-10-23T00:00:00.0") + "]}";
+        // Including yesterday: as recent days, whatever the watch did.
+        expectLifetime(Duration.ofMinutes(15), STEPS, synced, () -> client().dailyTotals(OLDER, YESTERDAY));
+        // Older, and every day's watch data runs to midnight: a day, as the weigh-ins over a range.
+        expectLifetime(Duration.ofDays(1), STEPS, synced, () -> client().dailyTotals(OLDER.minusDays(1), OLDER));
+        // A day whose watch data stops at the last sync, or no watch data at all: soon, so a sync shows.
+        // (Each its own range, so its own file.)
+        expectLifetime(Duration.ofMinutes(15), STEPS, "{\"data\":[" + day(OLDER.minusDays(1), "2026-10-22T00:00:00.0")
+                + "," + day(OLDER, "2026-10-22T08:42:00.0") + "]}", () -> client().dailyTotals(OLDER, OLDER));
+        expectLifetime(Duration.ofMinutes(15), STEPS, "{\"data\":[]}",
+                () -> client().dailyTotals(OLDER.minusDays(2), OLDER));
+    }
+
+    @Test
+    void anOlderLogWithADayTheWatchHasntSyncedSinceKeepsItsWatchDataOnlyMinutes() {
+        // 20 and 21 October, so even the activity search, a day wider, ends before yesterday. Each would otherwise
+        // last an hour, as Garmin had nothing.
+        signedIn();
+        LocalDate from = OLDER.minusDays(2);
+        LocalDate to = OLDER.minusDays(1);
+        // The 21st has nothing from the watch yet (so the next day isn't asked for: that's only when data stops early).
+        String unsynced = "{\"data\":[" + day(from, "2026-10-21T00:00:00.0") + "]}";
+        for (int i = 0; i < 3; i++) {
+            garmin.respond(STEPS, 200, unsynced)
+                    .respond(sleepRange(from, to), 200, "{\"individualStats\":[]}")
+                    .respond(weightRange(from, to), 200, "{\"dailyWeightSummaries\":[]}")
+                    .respond(ACTIVITIES, 200, "[]");
+        }
+
+        client().dailyLog(from, to);
+        clock.advance(Duration.ofMinutes(10));
+        client().dailyLog(from, to);
+        clock.advance(Duration.ofMinutes(5));
+        client().dailyLog(from, to);
+
+        // Activities as recent ones (10 minutes: asked again at 10), steps and sleep as recent days (15: asked again
+        // at 15). At 15 the steps came fresh, so the activities were asked again too, though their copy from 10 was
+        // still good. The scale doesn't sync through the watch, so the weigh-ins last as usual: an hour.
+        assertThat(garmin.requests(ACTIVITIES)).hasSize(3);
+        assertThat(garmin.requests(STEPS)).hasSize(2);
+        assertThat(garmin.requests(sleepRange(from, to))).hasSize(2);
+        assertThat(garmin.requests(weightRange(from, to))).hasSize(1);
+    }
+
+    @Test
+    void aDayThatJustBecameFinalComesWithActivitiesFetchedAfterTheSync() {
+        // Review, 22 November 2026: steps, sleep and activities are cached apart, at different times. Here the
+        // activities were asked again at 11 minutes, the watch synced a run at 13, and at 16 the steps' copy has run
+        // out and the new one makes yesterday final. The 11-minute activities copy (good until 21) mustn't be used.
+        signedIn();
+        String run = """
+                [{"activityId":9,"activityName":"Evening Run","activityType":{"typeKey":"running"},
+                  "startTimeLocal":"2026-10-23 18:00:00","startTimeGMT":"2026-10-23 17:00:00","duration":1800.0}]""";
+        garmin.respond(STEPS, 200, "{\"data\":[]}")
+                .respond(STEPS, 200, "{\"data\":[" + day(YESTERDAY, "2026-10-24T00:00:00.0") + "]}")
+                .respond(ACTIVITIES, 200, "[]").respond(ACTIVITIES, 200, "[]").respond(ACTIVITIES, 200, run)
+                .respond(TYPES, 200, fixture("activity-types.json"));
+        for (int i = 0; i < 2; i++) {
+            garmin.respond(sleepRange(YESTERDAY, YESTERDAY), 200, "{\"individualStats\":[]}")
+                    .respond(weightRange(YESTERDAY, YESTERDAY), 200, "{\"dailyWeightSummaries\":[]}");
+        }
+
+        assertThat(client().dailyLog(YESTERDAY, YESTERDAY).getFirst().isFinal()).isFalse();
+        clock.advance(Duration.ofMinutes(11));
+        client().dailyLog(YESTERDAY, YESTERDAY);
+        clock.advance(Duration.ofMinutes(5));
+        LogDay yesterday = client().dailyLog(YESTERDAY, YESTERDAY).getFirst();
+
+        assertThat(yesterday.isFinal()).isTrue();
+        assertThat(yesterday.activities()).extracting(a -> a.activity().name()).containsExactly("Evening Run");
+        assertThat(garmin.requests(ACTIVITIES)).hasSize(3);
+        assertThat(garmin.requests(sleepRange(YESTERDAY, YESTERDAY))).hasSize(2);
+    }
+
+    @Test
+    void theLogDoesntReuseADayLongCopyOfTheSameSearchFromGetActivities() {
+        // Review, 22 November 2026: get_activities for 19 to 22 October keeps its copy for a day. The log for 20 and
+        // 21 October searches the same days, a day wider, but 21 October hasn't synced, so it asks Garmin itself.
+        signedIn();
+        LocalDate from = OLDER.minusDays(2);
+        LocalDate to = OLDER.minusDays(1);
+        garmin.respond(ACTIVITIES, 200, "[]").respond(ACTIVITIES, 200, "[]")
+                .respond(STEPS, 200, "{\"data\":[" + day(from, "2026-10-21T00:00:00.0") + "]}")
+                .respond(sleepRange(from, to), 200, "{\"individualStats\":[]}")
+                .respond(weightRange(from, to), 200, "{\"dailyWeightSummaries\":[]}");
+
+        client().activities(from.minusDays(1), to.plusDays(1), null);
+        client().dailyLog(from, to);
+        // Within the steps' 15 minutes, the log uses its own copy.
+        clock.advance(Duration.ofMinutes(5));
+        client().dailyLog(from, to);
+
+        assertThat(garmin.requests(ACTIVITIES)).hasSize(2);
+        assertThat(cacheFiles()).contains("activities-2026-10-19-to-2026-10-22-page-1.json",
+                "activities-2026-10-19-to-2026-10-22-log-page-1.json");
+    }
+
+    /** A day in the steps range reply, with its watch data ending at {@code end} (local). */
+    private static String day(LocalDate date, String end) {
+        return "{\"calendarDate\":\"" + date + "\",\"movement\":{\"steps\":{\"value\":9000}},"
+                + "\"wellnessChronology\":{\"endTimestampLocal\":\"" + end + "\"}}";
     }
 
     @Test

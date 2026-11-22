@@ -249,7 +249,8 @@ final class DataPrinter {
     /**
      * The daily log, the same as {@code get_daily_log} gives, for checking: a table with a row for every day
      * (sleep, steps, calories eaten and weight), then a table of the days' activities, oldest first. A day that isn't
-     * final (today) is marked with a *. Hours and minutes to 1 decimal place, as the health log has them.
+     * final is marked with a *: today, or a past day the watch hasn't synced since, which also gets a line saying where
+     * its watch data stops. Hours and minutes to 1 decimal place, as the health log has them.
      *
      * @param log  every day from {@code from} to {@code to}, oldest first
      * @param zone for the times of the weigh-ins: the Garmin profile's
@@ -258,6 +259,7 @@ final class DataPrinter {
         DateTimeFormatter day = from.getYear() == to.getYear() ? DAY : DATE;
         var rows = new ArrayList<List<String>>();
         var activities = new ArrayList<List<String>>();
+        var unsynced = new ArrayList<String>();
         boolean marked = false;
         for (LogDay d : log) {
             Sleep night = d.sleep();
@@ -278,6 +280,11 @@ final class DataPrinter {
                     time == null ? NONE : CLOCK.format(time.atZone(zone)),
                     weight == null ? NONE : String.valueOf(weight.weighIns())));
             marked |= !d.isFinal();
+            if (d.state() == LogDay.State.WATCH_NOT_SYNCED) {
+                unsynced.add("  " + day.format(d.date()) + ": " + (d.watchDataUntil() == null ? "no watch data"
+                        : "the watch's data stops at " + CLOCK.format(d.watchDataUntil()))
+                        + ". Sync the watch, then run log again with --no-cache.");
+            }
             for (LogDay.Activity a : d.activities()) {
                 ActivitySummary s = a.activity();
                 activities.add(List.of(
@@ -294,6 +301,7 @@ final class DataPrinter {
                 "Weighed", "Weigh-ins"), rows, Set.of(1, 2, 3, 4, 5, 6, 7));
         if (marked) {
             out.println("* Not final: Garmin may still add to it, so don't log it yet.");
+            unsynced.forEach(out::println);
         }
         out.println();
         if (activities.isEmpty()) {

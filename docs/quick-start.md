@@ -198,7 +198,7 @@ Sleep is the night that ended that morning. Calories eaten are food logged, not 
 
 One row per day, every day, oldest first, then the day's activities. The sleep, steps, calories eaten and weigh-ins come from real Garmin replies (20 November 2026), but trimmed to a few days, so the empty rows here would have numbers. The activities are made up.
 
-- **Final:** a `*` marks today. The watch and scale may still sync, so don't log it yet.
+- **Final:** a `*` marks a day that may still change, so don't log it yet: today, or a past day your watch hasn't synced since. A past one also gets a line saying where its watch data stops, such as "Fri 20 Nov: the watch's data stops at 08:42". Sync the watch, then run `log` again with `--no-cache`.
 - **Sleep** is the night that ended that morning, as in `sleep`. Hours and minutes are to 1 decimal place, as a spreadsheet has them.
 - **Calories eaten** is the food you logged (MyFitnessPal's daily total, synced to Garmin). It's never calories burned. A day with nothing logged shows `–`, like 12 November.
 - **Weight** is the day's first weigh-in, and body fat and muscle the first scale reading, as in `weight`. 14 November's two weights were typed in, so they have no body composition.
@@ -232,6 +232,7 @@ Garmin's replies are kept on disk, so running a command again answers from there
 | An older day's summary, sleep or weight | 30 days |
 | An older list of activities | 1 day |
 | Older weigh-ins over a range (`weight`), and older steps and sleep over a range (`log`) | 1 day, or 1 hour if there were none |
+| An older `log` range with a day your watch hasn't synced since | Its steps, sleep and activities 10–15 minutes, so a sync shows soon |
 | Garmin's list of activity types (`log`) | 30 days |
 | One activity | 7 days |
 

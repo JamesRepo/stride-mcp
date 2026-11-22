@@ -218,11 +218,24 @@ final class ToolReplies {
         return new LogReply.Day(
                 day.date().toString(),
                 day.isFinal(),
+                watchDataUntil(day),
                 logSleep(day.sleep()),
                 day.steps(),
                 day.caloriesEaten(),
                 activities.isEmpty() ? null : activities,
                 day.weight() == null ? null : logWeight(day.weight(), zone));
+    }
+
+    /**
+     * Where a past day's watch data stops, if the watch hasn't synced since: {@code 08:42}, or {@code none}. Null
+     * (left out) for a final day, and for today. The client decided which it is, so a call that ran past midnight
+     * can't disagree with itself.
+     */
+    static String watchDataUntil(LogDay day) {
+        if (day.state() != LogDay.State.WATCH_NOT_SYNCED) {
+            return null;
+        }
+        return day.watchDataUntil() == null ? "none" : CLOCK.format(day.watchDataUntil());
     }
 
     /** The score and hours asleep, or null if Garmin has neither for the night. */

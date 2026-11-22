@@ -617,7 +617,7 @@ class DataCommandsTest {
     }
 
     @Test
-    void logDefaultsToYesterdayAndADayWithNothingIsAllDashes() {
+    void logDefaultsToYesterdayAndADayWithNoWatchDataIsntFinal() {
         onTheEveningOfTheCapture();
         signedIn();
         nothingFor("2026-11-19", "2026-11-19");
@@ -625,8 +625,10 @@ class DataCommandsTest {
         assertThat(run("log")).isZero();
 
         assertThat(out()).isEqualTo("""
-                Date        Sleep  Hours  Steps  Calories eaten  Weight  Body fat  Muscle  Weighed  Weigh-ins
-                Thu 19 Nov      –      –      –               –       –         –       –  –        –
+                Date         Sleep  Hours  Steps  Calories eaten  Weight  Body fat  Muscle  Weighed  Weigh-ins
+                Thu 19 Nov*      –      –      –               –       –         –       –  –        –
+                * Not final: Garmin may still add to it, so don't log it yet.
+                  Thu 19 Nov: no watch data. Sync the watch, then run log again with --no-cache.
 
                 No activities.
 

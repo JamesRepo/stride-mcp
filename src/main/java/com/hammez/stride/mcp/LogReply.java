@@ -23,14 +23,18 @@ record LogReply(
     /**
      * One day.
      *
-     * @param isFinal       {@code final} in the JSON (a Java keyword): false for today, which may still change
-     * @param sleep         the night that ended that morning
-     * @param caloriesEaten the food logged, in kcal. Never calories burned.
-     * @param activities    the ones that started that day, oldest first; null (left out) if none
+     * @param isFinal        {@code final} in the JSON (a Java keyword): false if the day may still change: today, or a
+     *                       past day the watch hasn't synced since
+     * @param watchDataUntil only on a past day that isn't final: where Garmin's watch data for it stops, local, like
+     *                       {@code 08:42}, or {@code none}. So the AI can say why, and ask for a sync.
+     * @param sleep          the night that ended that morning
+     * @param caloriesEaten  the food logged, in kcal. Never calories burned.
+     * @param activities     the ones that started that day, oldest first; null (left out) if none
      */
     record Day(
             String date,
             @JsonProperty("final") boolean isFinal,
+            String watchDataUntil,
             Sleep sleep,
             Integer steps,
             Integer caloriesEaten,

@@ -104,25 +104,27 @@ class GarminTools {
     static final String GET_DAILY_LOG = """
             Everything Garmin has for each day of the owner's daily health log, one entry per day, oldest first. \
             Use it to fill in or catch up a log, such as "fill in my health log for yesterday", or for "what did \
-            Garmin record last week?". For each day: date; final; sleep: the night that ended on the morning of \
-            that date (2026-11-12's sleep is the night of 11 to 12 November), with its score (0 to 100) and hours \
-            (time asleep); steps; caloriesEaten; activities: each one that started that day in the owner's time zone, \
-            oldest first, with id, name, type (Garmin's type key, such as treadmill_running), group and minutes \
-            (the whole duration, not the moving time); and weight: kg (the day's first weight), bodyFatPercent \
-            (18.5 means 18.5%) and muscleMassKg from the day's first scale reading, time (local, like 07:37) of the \
-            weigh-in that gave the weight, or of the scale reading if no weigh-in had a weight, and weighIns (how \
-            many that day). caloriesEaten is the food logged that \
-            day in kcal (MyFitnessPal's daily total, as synced to Garmin). It is never calories burned. group is \
+            Garmin record last week?". For each day: date; final; watchDataUntil (see below); sleep: the night \
+            that ended on the morning of that date (2026-11-12's sleep is the night of 11 to 12 November), with its \
+            score (0 to 100) and hours (time asleep); steps; caloriesEaten; activities: each one that started that \
+            day in the owner's time zone, oldest first, with id, name, type (Garmin's type key, such as \
+            treadmill_running), group and minutes (the whole duration, not the moving time); and weight: kg (the \
+            day's first weight), bodyFatPercent (18.5 means 18.5%) and muscleMassKg from the day's first scale \
+            reading, time (local, like 07:37) of the weigh-in that gave the weight, or of the scale reading if no \
+            weigh-in had a weight, and weighIns (how many that day). caloriesEaten is the food logged that day in \
+            kcal (MyFitnessPal's daily total, as synced to Garmin). It is never calories burned. group is \
             Garmin's top-level type: running for running, trail_running and treadmill_running, cycling for \
             indoor_cycling, fitness_equipment for strength_training. Parts Garmin doesn't have are left out, so a \
-            day with nothing is only its date and final. final: false means the day may still change (today: the \
-            watch and scale may still sync), so don't log it yet. `from` and `to` are dates like 2026-11-08, both \
+            day with nothing is only its date and final. final: false means the day may still change, so don't log \
+            it yet: it's today, or a past day the watch hasn't synced since. A past day that isn't final has \
+            watchDataUntil: where Garmin's watch data for it stops (local, like 08:42, or none). Then ask the owner \
+            to sync their watch, and call again with refresh. `from` and `to` are dates like 2026-11-08, both \
             included, in the owner's time zone, covering at most \
             """ + GarminDataConfig.MAX_LOG_RANGE_DAYS + " days and none after today. For more, call again for each "
             + GarminDataConfig.MAX_LOG_RANGE_DAYS + " days. Leave both out for yesterday. Only `from`: from there "
             + "to yesterday, or just today if `from` is today. Only `to`: that one day. A range ending before "
-            + "yesterday is cached for up to a day, or an hour if Garmin had nothing. The reply also gives today's "
-            + "date in the owner's time zone.";
+            + "yesterday is cached for up to a day once the watch has synced past it, otherwise its sleep, steps and "
+            + "activities for up to 15 minutes. The reply also gives today's date in the owner's time zone.";
 
     static final String REFRESH = "Only set this when the owner says data is missing or they just synced their "
             + "watch, or an activity looks unfinished (Garmin was still processing it). Replies are cached: today's "

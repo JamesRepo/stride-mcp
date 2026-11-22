@@ -2,7 +2,7 @@
 
 **Done when:** I ask "fill in my health log for yesterday", and the AI gets every column Garmin can supply for that day from one tool call.
 
-_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Step 3 done 21 November 2026: the client (`GarminClient.dailyLog`). Step 4 done 22 November 2026: the tool `get_daily_log` and `stride-mcp log`, with the owner's answers on the [range rules](#decisions-to-make). Step 5 done 22 November 2026: the docs. Next: step 6, the owner's live check._
+_Status: plan approved 20 November 2026, with all the [decisions](#decisions-to-make). The owner confirmed which night goes with a date (✅) and approved the rest as proposed. Step 2 done 21 November 2026: the owner's capture of 20 November showed that both range replies are good enough, so a 28-day call takes about five requests, not 85 (see [What the capture showed](#what-the-capture-showed-20-november-2026)). The owner chose to add Garmin's calories eaten, as `caloriesEaten` (21 November 2026). Step 3 done 21 November 2026: the client (`GarminClient.dailyLog`). Step 4 done 22 November 2026: the tool `get_daily_log` and `stride-mcp log`, with the owner's answers on the [range rules](#decisions-to-make). Step 5 done 22 November 2026: the docs. Step 6 done 22 November 2026: the owner's live check in Codex and Claude Code passed, so **phase 4b is done** (see [Live check](#live-check-22-november-2026)). It found one thing to change: a day whose watch data hasn't synced was still `final`. Changed 22 November 2026: a past day is final only once the watch has synced since it ended (see [Final only after a sync](#final-only-after-a-sync)). Next: [4c](phase-4c-catch-up.md)._
 
 ## What the capture showed (20 November 2026)
 
@@ -110,8 +110,8 @@ The reply has `today`, `timeZone`, `from` and `to`, as `get_weight` does, then `
 - **`group`** is Garmin's top-level type: the type's ancestor just below `all`, or the type itself if it's already top-level. So `running`, `trail_running` and `treadmill_running` are all `running`, `indoor_cycling` is `cycling`, and `strength_training` is `fitness_equipment`. A type that isn't in Garmin's list gets no `group`. An activity names its parent only as a number (`parentTypeId`: 17 is `all`, 2 is `cycling`, 29 is `fitness_equipment`), so naming it needs Garmin's list of activity types, from `/activity-service/activity/activityTypes` (seen 20 November 2026). It hardly ever changes, so it's cached for 30 days. This means 4b doesn't depend on phase 2's open question about `--type running`, but it doesn't answer it either: the list says what's below `running`, not what Garmin's search filter does.
 - **`caloriesEaten`** is the food logged for that day, in kcal, from `calories.consumedValue` in the steps reply (no extra request). It's not calories burned, and the tool description says so. A day with none, or with 0, leaves it out: nobody eats 0 kcal, so 0 means nothing was logged. Protein, carbs and fat aren't in Garmin.
 - **`weight`** is the day's weigh-in, picked as in 4a.
-- **`final`** is `false` for today: the watch and scale may still sync. Yesterday is `true`, although the cache still treats it as changing (15 minutes): I log yesterday each morning, after the overnight sync, so it's normally complete (the owner's choice after review, 21 November 2026).
-- Parts Garmin doesn't have are left out. A day with nothing at all is `{ "date": …, "final": true }`, so the AI can tell "no data" from "not asked".
+- **`final`** is `false` for today: the watch and scale may still sync. A past day is `true` once the watch has synced since it ended, and until then `false`, with **`watchDataUntil`**: where Garmin's watch data for it stops (`"08:42"`, or `"none"`). See [Final only after a sync](#final-only-after-a-sync). This replaced "yesterday is final" (the owner's choice after review, 21 November 2026) after the live check.
+- Parts Garmin doesn't have are left out. A synced day with nothing at all is `{ "date": …, "final": true }`, so the AI can tell "no data" from "not asked".
 
 The reply speaks Garmin, not my spreadsheet. There's no `Run?` or `Gym?` here. Why: stride-mcp works with any AI app and any log, and the sheet's rules belong with the sheet. They're in [4c](phase-4c-catch-up.md).
 
@@ -152,7 +152,9 @@ The 28-day limit is Garmin's on the sleep call (python-garminconnect, checked 20
 | Most days per call | **28** | Garmin's limit. A longer catch-up makes more calls, 28 days each. |
 | Default | **Yesterday** | I log every day, and the day just finished is the one to log. That's one call with no inputs. |
 | Which night goes with a date? | ✅ **The night that ended that morning.** The owner confirmed the sheet works this way (20 November 2026): 19 November's score is the night of 18 to 19 November. | Garmin's own rule, and `get_sleep`'s, so nothing needs converting |
-| Today | **Allowed, with `final: false`** | So "how am I doing today?" works, and the AI knows not to log it yet |
+| Today | **Allowed, with `final: false`** | So "how am I doing today?" works, and the AI knows not to log it yet. After the live check, a past day the watch hasn't synced since is `final: false` too (the owner's choice, 22 November 2026, see [Final only after a sync](#final-only-after-a-sync)). |
+| How to tell a past day has synced? | ✅ **Its watch data runs to midnight, or a later day in the reply has watch data** (the owner's choice, 22 November 2026; the other option was also asking Garmin for its last sync time) | No extra requests: it's all in the steps range reply already asked for. |
+| Say why a day isn't final? | ✅ **Yes, `watchDataUntil`** (the owner's choice, 22 November 2026) | So the AI can say "Garmin only has data to 08:42; sync your watch". |
 | Range replies, or one day at a time? | ✅ **The range replies** (settled by the capture, 21 November 2026) | Both have every day and match the one-day replies. About five requests for 28 days, not 85. See [Garmin](#garmin). |
 | Which type is a `group`? | ✅ **The top-level type below `all`** (from the capture, 21 November 2026) | Garmin's own tree. `running` is its own group, and `trail_running` and `treadmill_running` are in it. |
 | Only `to` given? | ✅ **That one day** (the owner's choice, 22 November 2026) | The same rule as the other tools: the default length ending at `to`. Here the default is 1 day (`GarminDataConfig.DEFAULT_LOG_RANGE_DAYS`). |
@@ -181,7 +183,63 @@ The 28-day limit is Garmin's on the sleep call (python-garminconnect, checked 20
    - The range rules are in one place, `garmin/LogRange`, so `stride-mcp log` always matches the tool (after review, 22 November 2026). Each turns a day after today into its own error.
    - Tests: the real fixtures (28 days, with today a part day, days with nothing, 12 November without `caloriesEaten`, 14 November with two weigh-ins), the defaults, the range rules, 429 once, `refresh`, the inputs the AI sees, a `tools/call` over stdio, and the CLI's output and `--no-cache`.
 5. **Docs:** the quick start, the tool table, AGENTS.md status. ✅ Done 22 November 2026: the quick start's command, tool and cache tables, and a "Daily log" example (from the real fixtures, with made-up activities). `DataCommandsTest.logAsTheQuickStartShowsIt` pins the same output, so the two can't drift apart.
-6. **Live check** (owner): "what did Garmin record for the last week?" in Codex, which I'll use every day, then in Claude Code. Compare with the Garmin Connect app.
+6. **Live check** (owner): "what did Garmin record for the last week?" in Codex, which I'll use every day, then in Claude Code. Compare with the Garmin Connect app. ✅ Done 22 November 2026: see [Live check](#live-check-22-november-2026).
+
+## Live check (22 November 2026)
+
+The owner rebuilt the jar, ran `stride-mcp log` for 15 to 21 November, then added stride to Codex (`codex mcp add`) and asked the questions in Codex and in Claude Code.
+
+| Checked | Result |
+|---|---|
+| `stride-mcp log` with no dates | ✅ Yesterday, Sat 21 November, not marked with a `*` |
+| A week, 15 to 21 November | ✅ 7 days, oldest first, with sleep, steps, calories eaten and weigh-ins. Four activities: `strength_training` in `fitness_equipment` three times, and `soccer` in `team_sports`. The range replies read right with real data over several days. |
+| Today | ✅ Marked `*`, with the calories logged in MyFitnessPal so far (1,374 kcal) |
+| A day after today | ✅ Refused: "2026-11-23 is after today (2026-11-22). Garmin has nothing for it yet." |
+| The AI apps | ✅ Codex and Claude Code both found `get_daily_log` and used it, and the owner found their answers right. stride-mcp's log showed Codex's calls: `get_daily_log`, then `get_sleep` and `get_daily_summary` for follow-up questions. |
+| Time | 🟡 The first call took 8.6 seconds: about six requests, one after another, with the activity types fetched for the first time. Garmin was slow that evening (one night's sleep took 4.4 s, and a `whoami` timed out connecting). Inside Codex's 60 seconds, so nothing to change yet. If it stays slow, the requests could be made at the same time. |
+
+**Found: an unsynced day was `final`.** The watch hadn't synced since 08:43 on Friday 20 November. Friday still had 95 steps, the same as in the capture that morning, and Saturday had no steps or sleep, only the scale's weigh-in and MyFitnessPal's calories (which reach Garmin without the watch). Friday was `final`, as is any day before today, so the AI would have logged it as finished. Garmin's data was right: it just didn't have the rest of the day yet.
+
+## Final only after a sync
+
+The owner's choice (22 November 2026): **a day before today is `final` only once the watch has synced since that day ended.** Until then it's `final: false`, like today, so the AI doesn't log it yet. This replaced "yesterday is final" in [Decisions](#decisions-to-make). ✅ Built 22 November 2026.
+
+**Where it comes from.** Each day in the steps range reply has a `wellnessChronology`: where that day's watch data starts and ends. In the capture of 20 November 2026, every past day ended at the next midnight (25 hours on the clock-change day), and today stopped at 08:42, a minute before the watch's last sync. So:
+
+| A past day is final when | Why |
+|---|---|
+| Its watch data runs to the next midnight | Data to midnight can only have come from a sync after the day ended |
+| Or a later day has watch data | That data came from a later sync too. It covers a day the watch stopped recording early (a flat battery), which never runs to midnight. |
+
+**Watch data** is a day's `wellnessChronology` **and** a steps value (0 counts). A chronology alone doesn't count: Garmin might make one for a day when only MyFitnessPal synced (the owner's choice after review, 22 November 2026, until a capture shows what Garmin does; see below).
+
+**The last day.** "A later day" is looked for in the reply, so the range's last day has none. If the last day's watch data stops before midnight, the next day's steps are asked for too, in a one-day request of their own, only to decide (the owner's choice after review, 22 November 2026). It's not asked for when the last day runs to midnight, has no watch data, or is today, so a normal call makes no extra request. The next day isn't in the log.
+
+Otherwise the day is `final: false`, with `watchDataUntil` set to where its data stops (`"08:42"`), or `"none"` if Garmin has no watch data for it (Saturday in the live check).
+
+| Case | What you get |
+|---|---|
+| Yesterday, before the overnight sync | `final: false`, `watchDataUntil: "none"`, or the time of the last sync if it was during the day |
+| A flat battery on the 17th, synced on the 18th | The 17th is final: the 18th has watch data (asked for too if the 17th is the last day) |
+| The last day has no watch data at all, but the watch was synced later (not worn that day) | Not final, `"none"`: the next day isn't asked for in that case (the owner's choice). Log it by hand. |
+| Only MyFitnessPal synced on a day | Its calories show, but it's not watch data, so it neither is final nor makes an earlier day final |
+| Today | `final: false`, never `watchDataUntil` |
+
+`dailyLog` decides each day's state (`LogDay.State`: `FINAL`, `TODAY`, `WATCH_NOT_SYNCED`), and the reply and the CLI only read it. So a call that runs past midnight can't call a day both "today" and "not synced" (after review, 22 November 2026).
+
+**Caching.** While a range has a day that isn't final, its steps and sleep are only cached for 15 minutes, and its activities for 10, even for an older range. So a sync shows up soon. Fixed after review (22 November 2026):
+
+- When the steps come fresh from Garmin (the range, or the next day), the sleep and activities are asked for fresh too. Otherwise a day could turn final with an activities copy from before the sync, missing a run.
+- The log's activity searches have cache files of their own (`activities-…-log`). Otherwise it could reuse a copy `get_activities` saved for a day, after the watch synced.
+
+The weigh-ins come from the scale, not the watch, so they're cached as before.
+
+**Where it shows.** The tool's description says what `final: false` and `watchDataUntil` mean, and to ask the owner to sync, then call again with `refresh`. `stride-mcp log` marks the day with a `*` and adds a line: "Fri 20 Nov: the watch's data stops at 08:42. Sync the watch, then run log again with --no-cache."
+
+**Not checked yet:**
+
+- A day the watch stopped early, as Garmin really sends it. That `wellnessChronology` ends at the last data, not at midnight, is from the capture's part day (today), not a past one.
+- **Whether Garmin makes a `wellnessChronology` for a day when only MyFitnessPal synced.** The owner will run `stride-mcp capture` some morning after logging food in MyFitnessPal, before the watch syncs, and look at today in `summary-range.json`: does it have a `wellnessChronology`, and where does it end? If Garmin never makes one without the watch, the steps condition can go.
 
 ## Not in this plan
 

@@ -186,7 +186,7 @@ Tickets and tokens are never printed in messages or logs.
 5. ✅ **DiTokenClient:** ticket-for-tokens swap, and refresh.
 6. ✅ **TokenManager + whoami:** load tokens, refresh if close to expiry, save, then fetch my profile.
 7. ✅ **Tests:** each part tested against a fake Garmin server (no real logins), covering success, bad paste, rejected ticket, unknown client IDs, 429 and an expired refresh token.
-8. 🟡 **Live check:** `login` and `whoami` worked for real on 23 October 2026. On 24 October 2026 the access token ran out, and the next command refreshed it by itself and worked. The token file stayed `600`, and the session moved on to 30 days from that refresh. **Still to confirm:** it still works days later, with no new login.
+8. 🟡 **Live check:** `login` and `whoami` worked for real on 23 October 2026. On 24 October 2026 the access token ran out, and the next command refreshed it by itself and worked. The token file stayed `600`, and the session moved on to 30 days from that refresh. On 22 November 2026, a month after the first login, `whoami` refreshed the access token by itself again, and the session moved on to 22 December. **Still to confirm:** it still works days later, with no new login. The owner may have logged in again since 23 October, so this doesn't settle it yet.
 
 ## Not in phase 1
 

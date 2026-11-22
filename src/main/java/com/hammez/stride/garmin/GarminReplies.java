@@ -201,8 +201,9 @@ final class GarminReplies {
      * 20 November 2026 (28 days): {@code data}, one entry per day with its {@code calendarDate}, oldest first, every
      * day there. Its field names aren't the one-day reply's: steps are {@code movement.steps.value}, calories eaten
      * {@code calories.consumedValue}. On a day with nothing logged, {@code consumedValue} was null (12 November).
+     * How far the day's watch data goes is {@code wellnessChronology.endTimestampLocal} (see {@link DayTotals}).
      * <p>
-     * A day with neither steps nor calories eaten is left out ("Garmin has nothing"), and so is a day outside
+     * A day with no steps, calories eaten or watch data is left out ("Garmin has nothing"), and so is a day outside
      * {@code from}–{@code to}. Calories eaten of 0 or less count as none: nobody eats 0 kcal.
      * <p>
      * No entry had {@code privacyProtected} in the capture (20 November 2026), but the one-day reply can have it. So a
@@ -223,8 +224,9 @@ final class GarminReplies {
             if (eaten != null && eaten <= 0) {
                 eaten = null;
             }
-            if (steps != null || eaten != null) {
-                days.add(new DayTotals(date, steps, eaten));
+            LocalDateTime until = localDateTime(day.path("wellnessChronology"), "endTimestampLocal", what);
+            if (steps != null || eaten != null || until != null) {
+                days.add(new DayTotals(date, steps, eaten, until));
             }
         }
         days.sort(Comparator.comparing(DayTotals::date));

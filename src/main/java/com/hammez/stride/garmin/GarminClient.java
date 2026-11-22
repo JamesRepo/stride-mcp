@@ -119,17 +119,27 @@ public class GarminClient {
      *         so nothing is sent to Garmin.
      */
     public List<ActivitySummary> activities(LocalDate from, LocalDate to, String type) {
+        return activities(from, to, type, null);
+    }
+
+    /**
+     * @param log how {@link #dailyLog} wants it, or null for any other search. The log's searches have cache files of
+     *            their own, so it never reuses a copy {@code get_activities} saved for a day, while the watch may still
+     *            add to it.
+     */
+    private List<ActivitySummary> activities(LocalDate from, LocalDate to, String type, LogSearch log) {
         checkRange(from, to, GarminDataConfig.MAX_RANGE_DAYS);
         String what = "the activities from " + from + " to " + to;
-        String name = "activities-" + from + "-to-" + to + (type == null ? "" : "-" + fileSafe(type));
-        if (!skipCache) {
+        String name = "activities-" + from + "-to-" + to + (type == null ? "" : "-" + fileSafe(type))
+                + (log == null ? "" : "-log");
+        if (useCache(log)) {
             Optional<List<ActivitySummary>> copy = cachedActivities(name, what);
             if (copy.isPresent()) {
                 return copy.get();
             }
         }
         // Needs "today", so the profile. Look it up before any page, so a profile error can't waste a whole download.
-        boolean older = isOlder(to);
+        boolean older = isOlder(to) && (log == null || log.watchSynced());
         var pages = new ArrayList<String>();
         var found = new ArrayList<ActivitySummary>();
         for (int page = 0; page < config.activitiesPageLimit(); page++) {
@@ -291,23 +301,32 @@ public class GarminClient {
 
     /**
      * Each day's steps and calories eaten on {@code from} to {@code to} (both included), oldest first, from the range
-     * of daily summaries: one request, whatever the range. A day with neither is left out, as are days Garmin sends
-     * outside the range. Cached as {@link #weighIns(LocalDate, LocalDate)} is.
+     * of daily summaries: one request, whatever the range. Also where each day's watch data ends. A day with none of
+     * these is left out, as are days Garmin sends outside the range. Cached as {@link #weighIns(LocalDate, LocalDate)}
+     * is, except that a range with a day the watch hasn't synced since ({@link #watchSynced}) is only kept as long as
+     * a recent one, so a sync shows soon. That includes a range with nothing in it.
      *
      * @return empty if Garmin had nothing
      * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
      *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS}. A safety net, so nothing is sent to Garmin.
      */
     public List<DayTotals> dailyTotals(LocalDate from, LocalDate to) {
+        return dailyTotalsFetched(from, to).value();
+    }
+
+    /** {@link #dailyTotals}, saying whether it came from Garmin just now rather than the cache. */
+    private Fetched<List<DayTotals>> dailyTotalsFetched(LocalDate from, LocalDate to) {
         checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
         String what = "the daily summaries from " + from + " to " + to;
         Me me = me();
-        return cached("summary-" + from + "-to-" + to, !skipCache,
+        return fetched("summary-" + from + "-to-" + to, !skipCache,
                 () -> api.get(config.dailySummariesPath(), Map.of(
                         config.dailySummariesStartDateParam(), from.toString(),
                         config.dailySummariesEndDateParam(), to.toString())),
                 body -> GarminReplies.rangeTotals(parse(body, what), from, to, what),
-                found -> rangeLifetime(to, me, found.isEmpty()));
+                found -> watchSynced(from, to, byDate(found, DayTotals::date), today(me))
+                        ? rangeLifetime(to, me, found.isEmpty())
+                        : lifetimes().recentDay());
     }
 
     /**
@@ -320,14 +339,20 @@ public class GarminClient {
      *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS} (Garmin's limit). A safety net, so nothing is sent to Garmin.
      */
     public List<Sleep> sleep(LocalDate from, LocalDate to) {
+        return sleep(from, to, null);
+    }
+
+    /** @param log how {@link #dailyLog} wants it, or null for any other use */
+    private List<Sleep> sleep(LocalDate from, LocalDate to, LogSearch log) {
         checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
         String what = "the sleep for the nights ending " + from + " to " + to;
         Me me = me();
         String path = GarminDataConfig.fill(config.sleepStatsPath(), from.toString(), to.toString());
-        return cached("sleep-" + from + "-to-" + to, !skipCache,
+        boolean watchSynced = log == null || log.watchSynced();
+        return cached("sleep-" + from + "-to-" + to, useCache(log),
                 () -> api.get(path, Map.of()),
                 body -> GarminReplies.rangeSleep(parse(body, what), from, to, what),
-                found -> rangeLifetime(to, me, found.isEmpty()));
+                found -> watchSynced ? rangeLifetime(to, me, found.isEmpty()) : lifetimes().recentDay());
     }
 
     /**
@@ -362,6 +387,13 @@ public class GarminClient {
      * If an activity's type isn't in the cached list of activity types, the list is asked for again, once, as Garmin
      * may have added it (the owner's choice, 21 November 2026). Only once per type per run, so a type Garmin never
      * lists doesn't cost a request on every call: it just has no group.
+     * <p>
+     * A day is final only once it's before today and the watch has synced since it ended ({@link #state}). If the last
+     * day's watch data stops early, the next day's steps are asked for too, to see a later sync. While the range has a
+     * day that isn't final, its steps, sleep and activities are cached only as long as recent ones, so a sync shows
+     * within minutes even for an older range. When the steps come fresh from Garmin, so do the sleep and activities,
+     * so a day that just became final never comes with an older copy of them. The log's activity searches have cache
+     * files of their own. The weigh-ins come from the scale, not the watch, so they're cached as usual.
      *
      * @throws IllegalArgumentException if {@code from} is after {@code to}, or the range is longer than
      *         {@link GarminDataConfig#MAX_LOG_RANGE_DAYS}. Callers check their own input first; this is a safety net,
@@ -370,12 +402,25 @@ public class GarminClient {
     public List<LogDay> dailyLog(LocalDate from, LocalDate to) {
         checkRange(from, to, GarminDataConfig.MAX_LOG_RANGE_DAYS);
         Me me = me();
-        Map<LocalDate, DayTotals> totals = byDate(dailyTotals(from, to), DayTotals::date);
-        Map<LocalDate, Sleep> nights = byDate(sleep(from, to), Sleep::date);
+        Fetched<List<DayTotals>> range = dailyTotalsFetched(from, to);
+        LocalDate today = today(me);
+        var totals = new HashMap<>(byDate(range.value(), DayTotals::date));
+        boolean freshSteps = range.fresh();
+        // The last day has no later day in the range to show a sync. If its watch data stops early (a flat battery),
+        // ask for the next day too, only then (the owner's choice, 22 November 2026). Only to decide; not in the log.
+        DayTotals last = totals.get(to);
+        if (to.isBefore(today) && last != null && last.hasWatchData() && !last.watchDataToMidnight()) {
+            Fetched<List<DayTotals>> next = dailyTotalsFetched(to.plusDays(1), to.plusDays(1));
+            next.value().forEach(day -> totals.putIfAbsent(day.date(), day));
+            freshSteps |= next.fresh();
+        }
+        // Steps just fetched may make a day final, so sleep and activities must be at least as new: no older copies.
+        var log = new LogSearch(watchSynced(from, to, totals, today), !freshSteps);
+        Map<LocalDate, Sleep> nights = byDate(sleep(from, to, log), Sleep::date);
         Map<LocalDate, DayWeight> weights = byDate(DayWeight.byDay(weighIns(from, to)), DayWeight::date);
         // Garmin's search goes by the date on the clock where the activity happened, which can be a day either side
         // of its day in the owner's time zone when travelling. So search a day wider, and keep what's in the range.
-        List<ActivitySummary> found = activities(from.minusDays(1), to.plusDays(1), null).stream()
+        List<ActivitySummary> found = activities(from.minusDays(1), to.plusDays(1), null, log).stream()
                 .filter(a -> {
                     LocalDate day = startDay(a, me.zone());
                     return day != null && !day.isBefore(from) && !day.isAfter(to);
@@ -391,17 +436,74 @@ public class GarminClient {
                     .add(new LogDay.Activity(a, types.group(a.type())));
         }
 
-        LocalDate today = today(me);
         var days = new ArrayList<LogDay>();
         for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
             DayTotals day = totals.get(date);
-            days.add(new LogDay(date, date.isBefore(today), nights.get(date),
+            days.add(new LogDay(date, state(date, totals, today),
+                    day != null && day.hasWatchData() ? day.watchDataUntil() : null,
+                    nights.get(date),
                     day == null ? null : day.steps(),
                     day == null ? null : day.caloriesEaten(),
                     activities.getOrDefault(date, List.of()),
                     weights.get(date)));
         }
         return List.copyOf(days);
+    }
+
+    /**
+     * True if every day from {@code from} to {@code to} is final ({@link #state}): the watch can't add to any of them.
+     *
+     * @param totals the steps over that range (and maybe the day after), by day
+     */
+    private static boolean watchSynced(LocalDate from, LocalDate to, Map<LocalDate, DayTotals> totals,
+            LocalDate today) {
+        for (LocalDate date = from; !date.isAfter(to); date = date.plusDays(1)) {
+            if (state(date, totals, today) != LogDay.State.FINAL) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Whether the day can still change. It's final once it's before today and the watch has synced since it ended
+     * (the owner's rule, 22 November 2026): when its watch data runs to midnight, or a later day in {@code totals}
+     * has watch data, which only a later sync could have sent. So a day the watch stopped recording early is final
+     * once a later day shows the watch synced. It isn't the time of the last sync, which these replies don't have.
+     * <p>
+     * Watch data is a day's {@code wellnessChronology} with a steps value ({@link DayTotals#hasWatchData()}): a
+     * chronology alone might come from MyFitnessPal syncing, not the watch. Not seen yet either way (22 November
+     * 2026); a capture is to check it.
+     *
+     * @param totals the steps over the range asked for (and maybe the day after), by day
+     */
+    private static LogDay.State state(LocalDate date, Map<LocalDate, DayTotals> totals, LocalDate today) {
+        if (!date.isBefore(today)) {
+            return LogDay.State.TODAY;
+        }
+        DayTotals day = totals.get(date);
+        if (day != null && day.watchDataToMidnight()) {
+            return LogDay.State.FINAL;
+        }
+        boolean syncedLater = totals.values().stream()
+                .anyMatch(later -> later.date().isAfter(date) && later.hasWatchData());
+        return syncedLater ? LogDay.State.FINAL : LogDay.State.WATCH_NOT_SYNCED;
+    }
+
+    /**
+     * How {@link #dailyLog} wants its sleep and activities.
+     *
+     * @param watchSynced false if the watch may still add to a day in the range: then an older range is only kept
+     *                    as long as a recent one, so a sync shows soon
+     * @param useCache    false right after the steps came fresh from Garmin, so neither is older than the steps that
+     *                    decided which days are final
+     */
+    private record LogSearch(boolean watchSynced, boolean useCache) {
+    }
+
+    /** Whether to read the cache for a search: never when skipping it, and not when the log says not to. */
+    private boolean useCache(LogSearch log) {
+        return !skipCache && (log == null || log.useCache());
     }
 
     /**
@@ -567,16 +669,26 @@ public class GarminClient {
      */
     private <T> T cached(String name, boolean useCache, Supplier<String> fetch, Function<String, T> read,
             Function<T, Duration> lifetime) {
+        return fetched(name, useCache, fetch, read, lifetime).value();
+    }
+
+    /** {@link #cached}, saying whether the value came from Garmin just now rather than the cache. */
+    private <T> Fetched<T> fetched(String name, boolean useCache, Supplier<String> fetch, Function<String, T> read,
+            Function<T, Duration> lifetime) {
         if (useCache) {
             Optional<T> copy = fromCache(List.of(name), bodies -> read.apply(bodies.getFirst()));
             if (copy.isPresent()) {
-                return copy.get();
+                return new Fetched<>(copy.get(), false);
             }
         }
         String body = fetch.get();
         T value = read.apply(body);
         cache.put(name, body, lifetime.apply(value));
-        return value;
+        return new Fetched<>(value, true);
+    }
+
+    /** @param fresh true if it came from Garmin just now, false if from the cache */
+    private record Fetched<T>(T value, boolean fresh) {
     }
 
     /**

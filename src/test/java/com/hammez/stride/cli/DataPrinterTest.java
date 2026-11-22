@@ -51,11 +51,12 @@ class DataPrinterTest {
                 null, null);
         var activity = new ActivitySummary(7L, "Something new", "new_sport_2030", null, null, null, null, null, null,
                 null, null, null, null);
-        var log = List.of(new LogDay(day, true, null, null, null, List.of(new LogDay.Activity(activity, null)),
-                new DayWeight(null, body, 1)));
+        var log = List.of(new LogDay(day, LogDay.State.FINAL, day.plusDays(1).atStartOfDay(), null, null, null,
+                List.of(new LogDay.Activity(activity, null)), new DayWeight(null, body, 1)));
         var bytes = new ByteArrayOutputStream();
 
-        new DataPrinter(new PrintStream(bytes, true, StandardCharsets.UTF_8)).log(log, day, day, ZoneId.of("Europe/London"));
+        new DataPrinter(new PrintStream(bytes, true, StandardCharsets.UTF_8)).log(log, day, day,
+                ZoneId.of("Europe/London"));
 
         assertThat(bytes.toString(StandardCharsets.UTF_8)).isEqualTo("""
                 Date        Sleep  Hours  Steps  Calories eaten  Weight  Body fat   Muscle  Weighed  Weigh-ins
@@ -66,6 +67,36 @@ class DataPrinterTest {
 
                 1 day from Thu 12 Nov to Thu 12 Nov.
                 Sleep is the night that ended that morning. Calories eaten are food logged, not burned.
+                """);
+    }
+
+    @Test
+    void pastDaysTheWatchHasntSyncedSinceSayWhereTheirDataStops() {
+        // As on 22 November 2026: the watch last synced at 08:43 on the 20th.
+        var fri = LocalDate.of(2026, 11, 20);
+        var sat = fri.plusDays(1);
+        var sun = sat.plusDays(1);
+        var log = List.of(
+                new LogDay(fri, LogDay.State.WATCH_NOT_SYNCED, LocalDateTime.of(2026, 11, 20, 8, 42), null, 95, null,
+                        List.of(), null),
+                new LogDay(sat, LogDay.State.WATCH_NOT_SYNCED, null, null, null, 3884, List.of(), null),
+                new LogDay(sun, LogDay.State.TODAY, null, null, null, 1374, List.of(), null));
+        var bytes = new ByteArrayOutputStream();
+
+        new DataPrinter(new PrintStream(bytes, true, StandardCharsets.UTF_8)).log(log, fri, sun,
+                ZoneId.of("Europe/London"));
+
+        // Today gets the * but no line: it's never final.
+        assertThat(bytes.toString(StandardCharsets.UTF_8)).startsWith("""
+                Date         Sleep  Hours  Steps  Calories eaten  Weight  Body fat  Muscle  Weighed  Weigh-ins
+                Fri 20 Nov*      –      –     95               –       –         –       –  –        –
+                Sat 21 Nov*      –      –      –      3,884 kcal       –         –       –  –        –
+                Sun 22 Nov*      –      –      –      1,374 kcal       –         –       –  –        –
+                * Not final: Garmin may still add to it, so don't log it yet.
+                  Fri 20 Nov: the watch's data stops at 08:42. Sync the watch, then run log again with --no-cache.
+                  Sat 21 Nov: no watch data. Sync the watch, then run log again with --no-cache.
+
+                No activities.
                 """);
     }
 
